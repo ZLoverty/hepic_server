@@ -97,8 +97,8 @@ class PiServer:
                         meter = 2 + random.uniform(-.2, .2)
 
                     message = {
-                        "weight": weight,
-                        "meter": meter
+                        "extrusion_force": weight * 9.8,
+                        "meter_count": meter
                     }
                     data_to_send = json.dumps(message).encode("utf-8") + b'\n'
                     
