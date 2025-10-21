@@ -120,21 +120,22 @@ class PiServer:
 
         async def receive_loop():
             """从客户端接收数据"""
-            while not shutdown_signal.done():
-                try:
-                    data = await reader.read(1024)
-                    if not data:
-                        self.logger.info(f"client {addr} has disconnected")
-                        if not shutdown_signal.done():
-                            shutdown_signal.set_result(True)
-                        break
-                    
-                    message = data.decode().strip()
-                    self.logger.info(f"received from {addr}: {message!r}")
-                except Exception as e:
-                    self.logger.error(f"error when receiving from {addr}: {e}", exc_info=True)
-                    if not shutdown_signal.done():
-                        shutdown_signal.set_result(True)
+            try:
+                while not shutdown_signal.done():
+                        data = await reader.read(1024)
+                        if not data:
+                            self.logger.info(f"client {addr} has disconnected")
+                            if not shutdown_signal.done():
+                                shutdown_signal.set_result(True)
+                        message = data.decode().strip()
+                        self.logger.info(f"received from {addr}: {message!r}")
+            except ConnectionResetError:
+                # 这是关键：捕获错误
+                print(f"Client {addr} forcibly closed connection (Connection reset).")
+            except Exception as e:
+                self.logger.error(f"error when receiving from {addr}: {e}", exc_info=True)
+                if not shutdown_signal.done():
+                    shutdown_signal.set_result(True)
 
         send_task = asyncio.create_task(send_loop())
         receive_task = asyncio.create_task(receive_loop())
