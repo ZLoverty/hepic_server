@@ -9,7 +9,6 @@ from pathlib import Path
 import snap7
 from snap7.util import get_real
 import argparse
-import numpy as np
 
 class PiServer:
     """
