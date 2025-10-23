@@ -20,6 +20,8 @@ class PiServer:
         self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from sensors
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.is_running = False
+        self.server = None
+        self.message_queue = asyncio.Queue()
 
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip)
@@ -62,90 +64,92 @@ class PiServer:
             logger.addHandler(file_handler)
         return logger
 
-    def run(self):
-        if self.test_mode:
-            pass
-    # async def _handle_client(self, reader, writer):
-    #     """为每个客户端连接创建独立的处理器"""
-    #     addr = writer.get_extra_info('peername')
-    #     self.logger.info(f"accepting new link from {addr}")
+    async def _handle_client(self, reader, writer):
         
+        addr = writer.get_extra_info('peername')
+        print(f"接受来自 {addr} 的新连接")
+        self.logger.info(f"accepting new link from {addr}")
 
-        
-
-       
-
-            # while not shutdown_signal.done():
-            #     try:
-            #         if not self.test_mode:
-            #             if self.plc.is_connected():
-            #                 # read weight and meter from PLC
-                            
-            #                 meter = np.nan
-            #             else:
-            #                 print("读取数据失败，请检查日志。可能是连接刚刚断开。")
-            #                 print("正在尝试重连 PLC")
-            #                 await asyncio.sleep(2)
-            #                 continue
-            #         else:
-            #             weight = 2 + random.uniform(-.2, .2)
-            #             meter = 2 + random.uniform(-.2, .2)
-
-            #         message = {
-            #             "extrusion_force": weight * 9.8,
-            #             "meter_count": meter
-            #         }
-            #         data_to_send = json.dumps(message).encode("utf-8") + b'\n'
+        async def send(writer):
+            try:
+                while True:
+                    if self.is_running:
+                        if self.test_mode: 
+                            # generate random data
+                            weight = 2 + random.uniform(-.2, .2)
+                            meter = 2 + random.uniform(-.2, .2)
+                        else:
+                            # read real data
+                            weight = self.mettler_worker.weight
+                            meter = self.meter_count_worker.meter_count
+                        message = {
+                            "extrusion_force": weight * 9.8,
+                            "meter_count": meter
+                        }
+                        data_to_send = json.dumps(message).encode("utf-8") + b'\n'
+                        
+                        print(f"sending to {addr} -> {message}")
+                        self.logger.debug(f"sending to {addr} -> {message}")
+                        writer.write(data_to_send)
+                        await writer.drain()                        
                     
-            #         self.logger.debug(f"sending to {addr} -> {message}")
-            #         writer.write(data_to_send)
-            #         await writer.drain()             
-            #         await asyncio.sleep(self.config.get("send_delay", 0.01))
-            #     except (ConnectionResetError, BrokenPipeError) as e:
-            #         self.logger.warning(f"disconnect from {addr}: {e}")
-            #         if not shutdown_signal.done():
-            #             shutdown_signal.set_result(True)
-            #     except KeyboardInterrupt:
-            #         print("\n程序被用户中断。")
-            #         sys.exit(1)
-            #     except Exception as e:
-            #         self.logger.error(f"unknow error sending to {addr}: {e}", exc_info=True)
-            #         if not shutdown_signal.done():
-            #             shutdown_signal.set_result(True)
+                    await asyncio.sleep(self.config.get("send_delay", 0.01))
 
+            except (ConnectionResetError, BrokenPipeError) as e:
+                self.logger.warning(f"disconnect from {addr}: {e}")
+                self.is_running = False
+            except KeyboardInterrupt:
+                print("\n程序被用户中断。")
+                self.logger.info(f"close connection from {addr}")
+                writer.close()
+                await writer.wait_closed()
+                sys.exit(1)
+            except Exception as e:
+                print(f"unknow error sending to {addr}: {e}")
+                self.logger.error(f"unknow error sending to {addr}: {e}", exc_info=True)
+                self.is_running = False
         
-        # self.logger.info(f"close connection from {addr}")
-        # writer.close()
-        # await writer.wait_closed()
+        async def recv(reader):
+            while True:
+                try:
+                    data = await reader.read(1024)
+                    if not data:
+                        print(f"客户端 {addr} 已断开连接。")
+                        self.is_running = False
+                        break
+                    message = data.decode().strip()
+                    print(f"从 {addr} 收到消息: {message}")
+                    await self.message_queue.put(message)
+                except Exception as e:
+                    print(f"从 {addr} 接收数据时出错: {e}")
+        
+        async def proc():
+            while True:
+                if self.message_queue:
+                    message = await self.message_queue.get()
+                    if message == "start":
+                        print("开始传输数据")
+                        self.is_running = True
+                    elif message == "stop":
+                        print("停止传输数据")
+                        self.is_running = False
 
-    async def _shutdown(self, sig):
-        """优雅地关闭服务器"""
-        self.logger.info(f"receive close signal: {sig.name}. closing...")
-        
-        # 停止接受新连接
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
+        send_task = asyncio.create_task(send(writer))
+        recv_task = asyncio.create_task(recv(reader))
+        proc_task = asyncio.create_task(proc())
 
-        # 取消所有正在运行的客户端任务
-        for task in list(self.tasks):
-            task.cancel()
-        
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
-        
-        loop = asyncio.get_running_loop()
-        loop.stop()
+        await asyncio.gather(send_task, recv_task, proc_task)
 
     async def run(self):
         """启动服务器并监听信号"""
         loop = asyncio.get_running_loop()
-        # 为 SIGINT (Ctrl+C) 和 SIGTERM (来自 systemd) 添加信号处理器
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
+
+        if not self.test_mode:
+            self.mettler_worker.run()
+            self.meter_count_worker.run()
 
         try:
             self.server = await asyncio.start_server(self._handle_client, host, port)
