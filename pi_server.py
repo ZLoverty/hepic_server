@@ -6,9 +6,8 @@ import logging.handlers
 import signal
 import sys
 from pathlib import Path
-import snap7
-from snap7.util import get_real
 import argparse
+import numpy as np
 
 class PiServer:
     """
@@ -18,16 +17,14 @@ class PiServer:
     def __init__(self, config_path, test_mode=False):
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
-        self.server = None
-        self.tasks = set()
-        self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from PLC
-        if not self.test_mode:
-            # read plc related params
-            self.mettler_ip = self.config.get("mettler_ip")
-        
-        self.mettler_worker = MettlerWorker(self.mettler_ip)
+        self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from sensors
+        self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.is_running = False
 
+        # initiate workers that communicates with sensors and PC
+        self.mettler_worker = MettlerWorker(self.mettler_ip)
+        self.meter_count_worker = MeterCountWorker()
+        
     def _load_config(self, path):
         """加载 JSON 配置文件"""
         config_file = Path(path).expanduser()
@@ -65,6 +62,9 @@ class PiServer:
             logger.addHandler(file_handler)
         return logger
 
+    def run(self):
+        if self.test_mode:
+            pass
     # async def _handle_client(self, reader, writer):
     #     """为每个客户端连接创建独立的处理器"""
     #     addr = writer.get_extra_info('peername')
@@ -157,6 +157,7 @@ class PiServer:
             sys.exit(1)
             
 class MettlerWorker:
+    """Grab weight data from the Mettler loadcell and store realtime data as a local variable."""
     def __init__(self, ip, port=1026, frequency=100):
         self.ip = ip
         self.port = port
@@ -221,7 +222,15 @@ class MettlerWorker:
         
     def stop(self):
         self.is_running = False
-        
+
+class MeterCountWorker:
+    def __init__(self):
+        self.meter_count = np.nan # the variable
+        self.is_running = False
+
+    def run(self):
+        raise NotImplementedError
+    
 if __name__ == "__main__":
     # 假设配置文件与脚本在同一目录下
 
