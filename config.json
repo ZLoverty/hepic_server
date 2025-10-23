@@ -4,10 +4,6 @@
     "send_delay": 0.01,
     "log_file": "./log/tcp_data_server.log",
     "log_level": "INFO",
-    "weight_db": 16,
-    "weight_start": 6,
-    "meter_db": 16,
-    "meter_start": 12,
-    "camera_ip": "192.168.22.120",
-    "plc_ip": "192.168.0.1"
+    "mettler_ip": "192.168.0.8",
+    "mettler_port": 1026
 }
