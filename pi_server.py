@@ -28,6 +28,8 @@ class PiServer:
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip)
         self.meter_count_worker = MeterCountWorker()
+        self.mettler_worker.run()
+        
 
     def _load_config(self, path):
         """加载 JSON 配置文件"""
@@ -173,10 +175,6 @@ class PiServer:
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
-
-        if not self.test_mode:
-            self.mettler_worker.run()
-            self.meter_count_worker.run()
 
         try:
             self.server = await asyncio.start_server(self._handle_client, host, port)
