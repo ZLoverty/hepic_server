@@ -196,7 +196,7 @@ class MettlerWorker:
         self.command = "SIX1\r\n"
         self.frequency = frequency
         self.is_running = False
-        self.weight = None
+        self.weight = np.nan
 
     async def run(self):
         self.is_running = True
