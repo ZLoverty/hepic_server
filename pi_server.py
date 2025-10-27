@@ -6,6 +6,7 @@ import logging.handlers
 import signal
 import sys
 from pathlib import Path
+import numpy as np
 import argparse
 import numpy as np
 
@@ -21,12 +22,13 @@ class PiServer:
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.is_running = False
         self.server = None
+        self.tasks = set()
         self.message_queue = asyncio.Queue()
 
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip)
         self.meter_count_worker = MeterCountWorker()
-        
+
     def _load_config(self, path):
         """加载 JSON 配置文件"""
         config_file = Path(path).expanduser()
@@ -70,69 +72,87 @@ class PiServer:
         print(f"接受来自 {addr} 的新连接")
         self.logger.info(f"accepting new link from {addr}")
 
-        async def send(writer):
-            try:
-                while True:
-                    if self.is_running:
-                        if self.test_mode: 
-                            # generate random data
-                            weight = 2 + random.uniform(-.2, .2)
-                            meter = 2 + random.uniform(-.2, .2)
-                        else:
-                            # read real data
-                            weight = self.mettler_worker.weight
-                            meter = self.meter_count_worker.meter_count
-                        message = {
-                            "extrusion_force": weight * 9.8,
-                            "meter_count": meter
-                        }
-                        data_to_send = json.dumps(message).encode("utf-8") + b'\n'
-                        
-                        print(f"sending to {addr} -> {message}")
-                        self.logger.debug(f"sending to {addr} -> {message}")
-                        writer.write(data_to_send)
-                        await writer.drain()                        
+        shutdown_signal = asyncio.Future()
+
+        async def send_loop():
+            """周期性地发送数据给客户端"""
+            while not shutdown_signal.done():
+                try:
+                    if self.test_mode: 
+                        # generate random data
+                        weight = 2 + random.uniform(-.2, .2)
+                        meter = 2 + random.uniform(-.2, .2)
+                    else:
+                        # read real data
+                        weight = self.mettler_worker.weight
+                        meter = self.meter_count_worker.meter_count
+             
+                    message = {
+                        "extrusion_force": weight * 9.8,
+                        "meter_count": meter
+                    }
+                    data_to_send = json.dumps(message).encode("utf-8") + b'\n'
                     
+                    self.logger.debug(f"sending to {addr} -> {message}")
+                    writer.write(data_to_send)
+                    await writer.drain()             
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
 
-            except (ConnectionResetError, BrokenPipeError) as e:
-                self.logger.warning(f"disconnect from {addr}: {e}")
-                self.is_running = False
-            except KeyboardInterrupt:
-                print("\n程序被用户中断。")
-                self.logger.info(f"close connection from {addr}")
-                writer.close()
-                await writer.wait_closed()
-                sys.exit(1)
-            except Exception as e:
-                print(f"unknow error sending to {addr}: {e}")
-                self.logger.error(f"unknow error sending to {addr}: {e}", exc_info=True)
-                self.is_running = False
-        
-        async def recv(reader):
-            while True:
-                try:
-                    data = await reader.read(1024)
-                    if not data:
-                        print(f"客户端 {addr} 已断开连接。")
-                        self.is_running = False
-                        break
-                    message = data.decode().strip()
-                    print(f"从 {addr} 收到消息: {message}")
-                    await self.message_queue.put(message)
+                except (ConnectionResetError, BrokenPipeError) as e:
+                    self.logger.warning(f"disconnect from {addr}: {e}")
+                    if not shutdown_signal.done():
+                        shutdown_signal.set_result(True)
+                except KeyboardInterrupt:
+                    print("\n程序被用户中断。")
+                    sys.exit(1)
                 except Exception as e:
-                    print(f"从 {addr} 接收数据时出错: {e}")
+                    self.logger.error(f"unknow error sending to {addr}: {e}", exc_info=True)
+                    if not shutdown_signal.done():
+                        shutdown_signal.set_result(True)
+
+        async def receive_loop():
+            """从客户端接收数据"""
+            try:
+                while not shutdown_signal.done():
+                        data = await reader.read(1024)
+                        if not data:
+                            self.logger.info(f"client {addr} has disconnected")
+                            if not shutdown_signal.done():
+                                shutdown_signal.set_result(True)
+                        message = data.decode().strip()
+                        self.logger.info(f"received from {addr}: {message!r}")
+            except ConnectionResetError:
+                # 这是关键：捕获错误
+                print(f"Client {addr} forcibly closed connection (Connection reset).")
+            except Exception as e:
+                self.logger.error(f"error when receiving from {addr}: {e}", exc_info=True)
+                if not shutdown_signal.done():
+                    shutdown_signal.set_result(True)
+
+        send_task = asyncio.create_task(send_loop())
+        receive_task = asyncio.create_task(receive_loop())
+        self.tasks.add(send_task)
+        self.tasks.add(receive_task)
+
+        await shutdown_signal
         
-        async def proc():
-            while True:
-                if self.message_queue:
-                    message = await self.message_queue.get()
-                    if message == "start":
-                        print("开始传输数据")
-                        self.is_running = True
-                    elif message == "stop":
-                        print("停止传输数据")
-                        self.is_running = False
+        send_task.cancel()
+        receive_task.cancel()
+        self.tasks.remove(send_task)
+        self.tasks.remove(receive_task)
+        
+        self.logger.info(f"close connection from {addr}")
+        writer.close()
+        await writer.wait_closed()
+
+    async def _shutdown(self, sig):
+        """优雅地关闭服务器"""
+        self.logger.info(f"receive close signal: {sig.name}. closing...")
+        
+        # 停止接受新连接
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
 
         send_task = asyncio.create_task(send(writer))
         recv_task = asyncio.create_task(recv(reader))
@@ -143,6 +163,13 @@ class PiServer:
     async def run(self):
         """启动服务器并监听信号"""
         loop = asyncio.get_running_loop()
+        # 为 SIGINT (Ctrl+C) 和 SIGTERM (来自 systemd) 添加信号处理器
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
+
+        if not self.test_mode:
+            self.mettler_worker.run()
+            self.meter_count_worker.run()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
@@ -159,7 +186,8 @@ class PiServer:
         except Exception as e:
             self.logger.critical(f"server fails to start: {e}", exc_info=True)
             sys.exit(1)
-            
+
+
 class MettlerWorker:
     """Grab weight data from the Mettler loadcell and store realtime data as a local variable."""
     def __init__(self, ip, port=1026, frequency=100):
@@ -234,7 +262,11 @@ class MeterCountWorker:
 
     def run(self):
         raise NotImplementedError
-    
+
+    def stop(self):
+        self.is_running = False
+            
+
 if __name__ == "__main__":
     # 假设配置文件与脚本在同一目录下
 
