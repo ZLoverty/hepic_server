@@ -6,7 +6,4 @@
     "log_level": "DEBUG",
     "mettler_ip": "192.168.0.8",
     "mettler_port": 1026
-    "log_level": "INFO",
-    "mettler_ip": "192.168.0.8",
-    "mettler_port": 1026
 }
