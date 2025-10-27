@@ -170,7 +170,7 @@ class PiServer:
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
 
         if not self.test_mode:
-            self.mettler_worker.run()
+            await self.mettler_worker.run()
             self.meter_count_worker.run()
 
         host = self.config.get("host", "0.0.0.0")
