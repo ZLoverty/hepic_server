@@ -154,12 +154,6 @@ class PiServer:
             self.server.close()
             await self.server.wait_closed()
 
-        send_task = asyncio.create_task(send(writer))
-        recv_task = asyncio.create_task(recv(reader))
-        proc_task = asyncio.create_task(proc())
-
-        await asyncio.gather(send_task, recv_task, proc_task)
-
     async def run(self):
         """启动服务器并监听信号"""
         loop = asyncio.get_running_loop()
