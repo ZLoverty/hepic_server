@@ -261,7 +261,8 @@ class MeterCountWorker:
         self.is_running = False
 
     def run(self):
-        raise NotImplementedError
+        # raise NotImplementedError
+        pass
 
     def stop(self):
         self.is_running = False
