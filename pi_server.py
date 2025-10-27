@@ -28,8 +28,6 @@ class PiServer:
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip)
         self.meter_count_worker = MeterCountWorker()
-        self.mettler_worker.run()
-        
 
     def _load_config(self, path):
         """加载 JSON 配置文件"""
