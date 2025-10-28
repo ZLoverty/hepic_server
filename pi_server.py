@@ -24,9 +24,10 @@ class PiServer:
         self.server = None
         self.tasks = set()
         self.message_queue = asyncio.Queue()
+        self.peer_addr = None
 
         # initiate workers that communicates with sensors and PC
-        self.mettler_worker = MettlerWorker(self.mettler_ip)
+        self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
         self.meter_count_worker = MeterCountWorker()
 
     def _load_config(self, path):
@@ -68,9 +69,9 @@ class PiServer:
 
     async def _handle_client(self, reader, writer):
         
-        addr = writer.get_extra_info('peername')
-        print(f"接受来自 {addr} 的新连接")
-        self.logger.info(f"accepting new link from {addr}")
+        self.peer_addr = writer.get_extra_info('peername')
+        print(f"接受来自 {self.peer_addr} 的新连接")
+        self.logger.info(f"accepting new link from {self.peer_addr}")
 
         shutdown_signal = asyncio.Future()
 
@@ -94,20 +95,20 @@ class PiServer:
                     }
                     data_to_send = json.dumps(message).encode("utf-8") + b'\n'
                     print(data_to_send)
-                    self.logger.debug(f"sending to {addr} -> {message}")
+                    self.logger.debug(f"sending to {self.peer_addr} -> {message}")
                     writer.write(data_to_send)
                     await writer.drain()             
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
 
                 except (ConnectionResetError, BrokenPipeError) as e:
-                    self.logger.warning(f"disconnect from {addr}: {e}")
+                    self.logger.warning(f"disconnect from {self.peer_addr}: {e}")
                     if not shutdown_signal.done():
                         shutdown_signal.set_result(True)
                 except KeyboardInterrupt:
                     print("\n程序被用户中断。")
                     sys.exit(1)
                 except Exception as e:
-                    self.logger.error(f"unknow error sending to {addr}: {e}", exc_info=True)
+                    self.logger.error(f"unknow error sending to {self.peer_addr}: {e}", exc_info=True)
                     if not shutdown_signal.done():
                         shutdown_signal.set_result(True)
 
@@ -117,16 +118,16 @@ class PiServer:
                 while not shutdown_signal.done():
                         data = await reader.read(1024)
                         if not data:
-                            self.logger.info(f"client {addr} has disconnected")
+                            self.logger.info(f"client {self.peer_addr} has disconnected")
                             if not shutdown_signal.done():
                                 shutdown_signal.set_result(True)
                         message = data.decode().strip()
-                        self.logger.info(f"received from {addr}: {message!r}")
+                        self.logger.info(f"received from {self.peer_addr}: {message!r}")
             except ConnectionResetError:
                 # 这是关键：捕获错误
-                print(f"Client {addr} forcibly closed connection (Connection reset).")
+                print(f"Client {self.peer_addr} forcibly closed connection (Connection reset).")
             except Exception as e:
-                self.logger.error(f"error when receiving from {addr}: {e}", exc_info=True)
+                self.logger.error(f"error when receiving from {self.peer_addr}: {e}", exc_info=True)
                 if not shutdown_signal.done():
                     shutdown_signal.set_result(True)
 
@@ -142,7 +143,7 @@ class PiServer:
         self.tasks.remove(send_task)
         self.tasks.remove(receive_task)
         
-        self.logger.info(f"close connection from {addr}")
+        self.logger.info(f"close connection from {self.peer_addr}")
         writer.close()
         await writer.wait_closed()
 
@@ -162,9 +163,14 @@ class PiServer:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
 
+        self.is_running = True
+
         if not self.test_mode:
-            await self.mettler_worker.run()
+            mettler_task = asyncio.create_task(self.mettler_worker.run())
+            
             # self.meter_count_worker.run()
+
+        shutdown_signal = asyncio.Future()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
@@ -174,38 +180,70 @@ class PiServer:
             addrs = ', '.join(str(sock.getsockname()) for sock in self.server.sockets)
             self.logger.info(f"server start listening {addrs}")
             await self.server.serve_forever()
+
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.logger.warning(f"disconnect from {self.peer_addr}: {e}")
+            if not shutdown_signal.done():
+                shutdown_signal.set_result(True)
+
+        except asyncio.CancelledError:
+            # 这是 _shutdown 触发的正常关闭
+            self.logger.debug(f"Send loop for {self.peer_addr} cancelled.")
+            if not shutdown_signal.done():
+                shutdown_signal.set_result(True)
+            raise # 重新引发 CancelledError 很重要
+        
         except Exception as e:
-            self.logger.critical(f"server fails to start: {e}", exc_info=True)
-            sys.exit(1)
+            self.logger.error(f"unknow error sending to {self.peer_addr}: {e}", exc_info=True)
+            if not shutdown_signal.done():
+                shutdown_signal.set_result(True)
 
 
 class MettlerWorker:
     """Grab weight data from the Mettler loadcell and store realtime data as a local variable."""
-    def __init__(self, ip, port=1026, frequency=100):
+    def __init__(self, ip, port=1026, frequency=100, logger=None):
         self.ip = ip
         self.port = port
         self.command = "SI\r\n"
         self.frequency = frequency
         self.is_running = False
         self.weight = np.nan
+        self.logger = logger or logging.getLogger("MettlerWorker") # 使用传入的 logger
 
     async def run(self):
-        self.is_running = True
-        print(f"connecting to {self.ip}: {self.port}")
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(self.ip, self.port), 
-            timeout=2.0
-        )
-        while self.is_running:
-            writer.write(self.command.encode("ascii"))
-            await writer.drain()
-            response_bytes = await asyncio.wait_for(
-                reader.read(1024), 
+        try:
+            self.is_running = True
+            print(f"Opening connection to {self.ip}: {self.port}")
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.ip, self.port), 
                 timeout=2.0
             )
-            response_str = response_bytes.decode("ascii")
-            weight_data = self.parse_six1_response(response_str)
-            self.weight = weight_data["gross"]
+            while self.is_running:
+                print(f"send \"{self.command.strip()}\" to {self.ip}: {self.port}")
+                writer.write(self.command.encode("ascii"))
+                await writer.drain()
+                response_bytes = await asyncio.wait_for(
+                    reader.read(1024), 
+                    timeout=2.0
+                )
+                response_str = response_bytes.decode("ascii")
+                print(f"Get response: {response_str}")
+                weight_data = self.parse_six1_response(response_str)
+                self.weight = weight_data["gross"]
+                await asyncio.sleep(1 / self.frequency)
+        except (asyncio.TimeoutError, ConnectionRefusedError) as e:
+            # 连接失败不应该让整个服务崩溃
+            self.logger.error(f"Failed to connect to Mettler {self.ip}: {e}")
+        except asyncio.CancelledError:
+            self.logger.info("Mettler worker cancelled.")
+        except Exception as e:
+            self.logger.error(f"Mettler worker error: {e}", exc_info=True)
+        finally:
+            self.is_running = False
+            if writer:
+                self.logger.info("Closing Mettler connection.")
+                writer.close()
+                await writer.wait_closed()
 
     def parse_six1_response(self, response_str):
         """
@@ -247,7 +285,6 @@ class MeterCountWorker:
     def stop(self):
         self.is_running = False
             
-
 if __name__ == "__main__":
     # 假设配置文件与脚本在同一目录下
 
