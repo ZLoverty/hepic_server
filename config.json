@@ -4,6 +4,6 @@
     "send_delay": 0.01,
     "log_file": "./log/tcp_data_server.log",
     "log_level": "DEBUG",
-    "mettler_ip": "192.168.0.8",
+    "mettler_ip": "127.0.0.1",
     "mettler_port": 1026
 }

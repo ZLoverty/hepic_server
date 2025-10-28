@@ -76,6 +76,7 @@ class PiServer:
 
         async def send_loop():
             """周期性地发送数据给客户端"""
+
             while not shutdown_signal.done():
                 try:
                     if self.test_mode: 
@@ -92,7 +93,7 @@ class PiServer:
                         "meter_count": meter
                     }
                     data_to_send = json.dumps(message).encode("utf-8") + b'\n'
-                    
+                    print(data_to_send)
                     self.logger.debug(f"sending to {addr} -> {message}")
                     writer.write(data_to_send)
                     await writer.drain()             
@@ -163,7 +164,7 @@ class PiServer:
 
         if not self.test_mode:
             await self.mettler_worker.run()
-            self.meter_count_worker.run()
+            # self.meter_count_worker.run()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
@@ -183,7 +184,7 @@ class MettlerWorker:
     def __init__(self, ip, port=1026, frequency=100):
         self.ip = ip
         self.port = port
-        self.command = "SIX1\r\n"
+        self.command = "SI\r\n"
         self.frequency = frequency
         self.is_running = False
         self.weight = np.nan
@@ -212,31 +213,20 @@ class MettlerWorker:
         响应格式: SIX1 Sts MinW CoZ Rep Calc PosE StepE MarkE Range TM Gross NET Tare Unit
         """
         parts = response_str.strip().split()
-        if len(parts) < 15 or parts[0] != 'SIX1':
+        # print(parts)
+        if len(parts) < 4 or parts[0] != 'S':
             print(f"错误：收到了意外的响应格式: {response_str}")
             return None
+        
         try:
             status_code = parts[1]
-            zero_center = parts[3] == 'Z' 
-            tare_mode_code = parts[10] 
-            gross_str = parts[11]
-            net_str = parts[12]
-            tare_str = parts[13]
-            unit = parts[14]
-
-            status_map = {'S': '稳定', 'D': '动态', '+': '过载', '-': '欠载', 'I': '无效值'}
-            status = status_map.get(status_code, f'未知 ({status_code})')
-
-            tare_mode_map = {'N': '无皮重', 'P': '预设皮重', 'M': '称量皮重'}
-            tare_mode = tare_mode_map.get(tare_mode_code, f'未知 ({tare_mode_code})')
-
-            gross = float(gross_str)
-            net = float(net_str)
-            tare = float(tare_str)
+            gross_str = parts[2]
+            unit = parts[3]
 
             return {
-                "status": status, "zero_center": zero_center, "tare_mode": tare_mode,
-                "gross": gross, "net": net, "tare": tare, "unit": unit
+                "status": status_code, 
+                "gross": float(gross_str),
+                "unit": unit
             }
         except (IndexError, ValueError) as e:
             print(f"错误：解析响应时出错: {e}\n原始响应: {response_str}")

@@ -22,8 +22,11 @@ class MockSensor:
             try:
                 while not shutdown_signal.done():
                     message = await self.message_queue.get()
+                    
                     if message == "SI":
-                        writer.write("0.0072 kg\n".encode("utf-8"))
+                        print(message)
+                        writer.write("S S 0.0072 kg\n".encode("utf-8"))
+                        
             except ConnectionResetError:
                 # 这是关键：捕获错误
                 print(f"Client {addr} forcibly closed connection (Connection reset).")
@@ -62,7 +65,7 @@ class MockSensor:
         send_task.cancel()
         recv_task.cancel()
         self.tasks.remove(send_task)
-        self.task.remove(recv_task)
+        self.tasks.remove(recv_task)
 
         print(f"connection closed")
         writer.close()
