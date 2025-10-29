@@ -23,7 +23,6 @@ SCRIPT_SOURCE="hepic_server.py"
 # 目标路径
 INSTALL_DIR="/opt/${APP_NAME}"
 CONFIG_DIR="/etc/${APP_NAME}"
-LOG_DIR="/var/log/${APP_NAME}"
 
 # 目标文件名
 SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_SOURCE}"
@@ -56,13 +55,11 @@ pip3 install numpy
 echo "📁 正在创建目录..."
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${CONFIG_DIR}"
-mkdir -p "${LOG_DIR}"
 
 # 授予 pi 用户对日志目录的写入权限
 chown "${RUN_USER}:${RUN_GROUP}" "${LOG_DIR}"
 echo "   - ${INSTALL_DIR}"
 echo "   - ${CONFIG_DIR}"
-echo "   - ${LOG_DIR} (并设置权限给 ${RUN_USER})"
 
 # --- 5. 复制应用程序文件 ---
 echo "🐍 正在复制 Python 脚本到 ${SCRIPT_DEST}..."
@@ -82,8 +79,7 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     "port": 10001,
     "send_delay": 0.01,
     "log_level": "INFO",
-    "log_file": "${LOG_DIR}/${APP_NAME}.log",
-    "mettler_ip": "192.168.1.100" 
+    "mettler_ip": "192.168.0.8" 
 }
 EOL
   echo "   -> 默认配置已创建。请稍后编辑此文件！"
