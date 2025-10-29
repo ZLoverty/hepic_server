@@ -51,9 +51,6 @@ echo "    将以用户: ${RUN_USER} (组: ${RUN_GROUP}) 身份运行服务"
 echo "📁 正在创建目录..."
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${CONFIG_DIR}"
-
-# 授予 pi 用户对日志目录的写入权限
-chown "${RUN_USER}:${RUN_GROUP}" "${LOG_DIR}"
 echo "   - ${INSTALL_DIR}"
 echo "   - ${CONFIG_DIR}"
 
