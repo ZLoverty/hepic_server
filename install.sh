@@ -47,12 +47,7 @@ fi
 echo "🚀 PiServer 安装程序正在运行..."
 echo "    将以用户: ${RUN_USER} (组: ${RUN_GROUP}) 身份运行服务"
 
-# --- 3. 配置 python ---
-echo "📦 正在安装 Python 依赖 (numpy)..."
-pip3 install numpy
-# 如果你还有其他依赖，在这里添加，例如： pip3 install systemd-python
-
-# --- 4. 创建目录 ---
+# --- 3. 创建目录 ---
 echo "📁 正在创建目录..."
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${CONFIG_DIR}"
@@ -62,13 +57,13 @@ chown "${RUN_USER}:${RUN_GROUP}" "${LOG_DIR}"
 echo "   - ${INSTALL_DIR}"
 echo "   - ${CONFIG_DIR}"
 
-# --- 5. 复制应用程序文件 ---
+# --- 4. 复制应用程序文件 ---
 echo "🐍 正在复制 Python 脚本到 ${SCRIPT_DEST}..."
 cp "${SCRIPT_SOURCE}" "${SCRIPT_DEST}"
 # 确保 Python 脚本可以被执行 (虽然我们是通过 python3 调用的，但这是个好习惯)
 chmod +x "${SCRIPT_DEST}"
 
-# --- 6. 创建默认配置文件 ---
+# --- 5. 创建默认配置文件 ---
 echo "📝 正在创建默认配置文件 ${CONFIG_FILE}..."
 
 # 使用 "cat << EOL" 来写入多行文本
@@ -88,7 +83,7 @@ else
   echo "   -> 配置文件 ${CONFIG_FILE} 已存在，跳过创建。"
 fi
 
-# --- 7. 创建 systemd 服务文件 ---
+# --- 6. 创建 systemd 服务文件 ---
 echo "⚙️  正在创建 systemd 服务文件 ${SERVICE_FILE}..."
 cat > "${SERVICE_FILE}" << EOL
 [Unit]
@@ -115,17 +110,17 @@ RestartSec=5
 WantedBy=multi-user.target
 EOL
 
-# --- 8. 创建 Python 虚拟环境 ---
+# --- 7. 创建 Python 虚拟环境 ---
 echo "🐍 正在 ${VENV_DIR} 创建 Python 虚拟环境..."
 ${PYTHON_PATH} -m venv "${VENV_DIR}"
 
-# --- 9. 在 Venv 中安装依赖 ---
+# --- 8. 在 Venv 中安装依赖 ---
 echo "📦 正在虚拟环境中安装依赖 (numpy)..."
 # 使用 Venv 内部的 pip
 "${VENV_DIR}/bin/pip" install numpy
 # 如果有其他依赖，在这里添加，例如: "${VENV_DIR}/bin/pip" install other-package
 
-# --- 10. 启用并启动服务 ---
+# --- 9. 启用并启动服务 ---
 echo "🔄 正在重新加载 systemd 并启动服务..."
 systemctl daemon-reload       # 告诉 systemd 扫描新文件
 systemctl enable "${APP_NAME}.service" # 设置为开机自启
