@@ -23,6 +23,7 @@ SCRIPT_SOURCE="hepic_server.py"
 # 目标路径
 INSTALL_DIR="/opt/${APP_NAME}"
 CONFIG_DIR="/etc/${APP_NAME}"
+VENV_DIR="${INSTALL_DIR}/venv" # Venv 目录
 
 # 目标文件名
 SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_SOURCE}"
@@ -46,7 +47,7 @@ fi
 echo "🚀 PiServer 安装程序正在运行..."
 echo "    将以用户: ${RUN_USER} (组: ${RUN_GROUP}) 身份运行服务"
 
-# --- 3. 安装依赖 ---
+# --- 3. 配置 python ---
 echo "📦 正在安装 Python 依赖 (numpy)..."
 pip3 install numpy
 # 如果你还有其他依赖，在这里添加，例如： pip3 install systemd-python
@@ -97,7 +98,7 @@ After=network.target
 [Service]
 # 你的 Python 脚本的启动命令
 # 它将自动传递配置文件路径作为参数
-ExecStart=${PYTHON_PATH} ${SCRIPT_DEST} ${CONFIG_FILE}
+ExecStart=${VENV_DIR}/bin/python ${SCRIPT_DEST} ${CONFIG_FILE}
 
 # 以 pi 用户身份运行 (安全性更高)
 User=${RUN_USER}
@@ -114,7 +115,17 @@ RestartSec=5
 WantedBy=multi-user.target
 EOL
 
-# --- 8. 启用并启动服务 ---
+# --- 8. 创建 Python 虚拟环境 ---
+echo "🐍 正在 ${VENV_DIR} 创建 Python 虚拟环境..."
+${PYTHON_PATH} -m venv "${VENV_DIR}"
+
+# --- 9. 在 Venv 中安装依赖 ---
+echo "📦 正在虚拟环境中安装依赖 (numpy)..."
+# 使用 Venv 内部的 pip
+"${VENV_DIR}/bin/pip" install numpy
+# 如果有其他依赖，在这里添加，例如: "${VENV_DIR}/bin/pip" install other-package
+
+# --- 10. 启用并启动服务 ---
 echo "🔄 正在重新加载 systemd 并启动服务..."
 systemctl daemon-reload       # 告诉 systemd 扫描新文件
 systemctl enable "${APP_NAME}.service" # 设置为开机自启

@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 import numpy as np
 import argparse
-import numpy as np
 
 class PiServer:
     """
