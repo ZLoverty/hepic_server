@@ -26,7 +26,7 @@ if __name__ == "__main__":
     # 定义连接的 BCM 引脚编号
     PIN_A = 17 
     PIN_B = 18
-    mcw = MeterCountWorker(17, 1, print=True)
+    mcw = MeterCountWorker(17, 18, print=True)
     mcw.run()
     # 初始化编码器
     #
