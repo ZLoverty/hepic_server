@@ -272,17 +272,7 @@ class MettlerWorker:
     def stop(self):
         self.is_running = False
 
-class MeterCountWorker:
-    def __init__(self):
-        self.meter_count = np.nan # the variable
-        self.is_running = False
 
-    def run(self):
-        # raise NotImplementedError
-        pass
-
-    def stop(self):
-        self.is_running = False
             
 if __name__ == "__main__":
     # 假设配置文件与脚本在同一目录下
