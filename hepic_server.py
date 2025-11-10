@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 import numpy as np
 import argparse
+from meter_count_worker import MeterCountWorker
+import threading
 
 class PiServer:
     """
@@ -19,13 +21,16 @@ class PiServer:
         self.logger = self._setup_logging()
         self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from sensors
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
+        self.pin_a = self.config.get("pin_a")
+        self.pin_b = self.config.get("pin_b")
         self.is_running = False
         self.server = None
         self.tasks = set()
 
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
-        self.meter_count_worker = MeterCountWorker()
+        self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
+        self.thread = threading.Thread(target=self.meter_count_worker.run)
 
     def _load_config(self, path):
         """加载 JSON 配置文件"""
@@ -158,6 +163,9 @@ class PiServer:
 
     async def run(self):
         """启动服务器并监听信号"""
+
+        self.thread.start()
+        
         loop = asyncio.get_running_loop()
         # 为 SIGINT (Ctrl+C) 和 SIGTERM (来自 systemd) 添加信号处理器
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -269,18 +277,6 @@ class MettlerWorker:
             self.logger.error(f"错误：解析响应时出错: {e}\n原始响应: {response_str}")
             return None
         
-    def stop(self):
-        self.is_running = False
-
-class MeterCountWorker:
-    def __init__(self):
-        self.meter_count = np.nan # the variable
-        self.is_running = False
-
-    def run(self):
-        # raise NotImplementedError
-        pass
-
     def stop(self):
         self.is_running = False
             
