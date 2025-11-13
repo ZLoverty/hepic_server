@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # ==============================================================================
-# HEPIC Server 安装脚本 (使用 Python Venv)
+# HEPIC Server 安装脚本 (使用 Python Venv) - 多文件版
 #
 # 这个脚本会：
 # 1. 检查是否以 root (sudo) 权限运行
 # 2. 安装 systemd 依赖 (python3-venv)
 # 3. 创建应用目录 (/opt/hepic_server) 和配置目录 (/etc/hepic_server)
-# 4. 复制 Python 脚本
+# 4. 复制当前目录下所有 .py 脚本到应用目录
 # 5. 创建默认 config.json
 # 6. 创建 venv 并使用 TUNA 镜像安装依赖
 # 7. 修正文件权限
@@ -16,13 +16,17 @@
 
 # --- 1. 定义变量 ---
 APP_NAME="hepic_server"
-SCRIPT_SOURCE="hepic_server.py"
+
+# 注意：这里定义的是【主程序】的文件名，Systemd 将运行这个文件
+# 即使复制了多个文件，我们也需要知道哪一个是入口
+SCRIPT_ENTRY="hepic_server.py" 
 
 INSTALL_DIR="/opt/${APP_NAME}"
 CONFIG_DIR="/etc/${APP_NAME}"
 VENV_DIR="${INSTALL_DIR}/venv"
 
-SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_SOURCE}"
+# 主程序的完整路径 (用于 Systemd)
+SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_ENTRY}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 
@@ -41,7 +45,7 @@ fi
 echo "🚀 HEPIC Server 安装程序正在运行..."
 echo "    将以用户: ${RUN_USER} (组: ${RUN_GROUP}) 身份运行服务"
 
-# --- 3. 安装系统依赖 (修复 Bug 2) ---
+# --- 3. 安装系统依赖 ---
 echo "📦 正在安装系统依赖 (python3-venv)..."
 apt-get update
 apt-get install -y python3-venv
@@ -53,10 +57,18 @@ mkdir -p "${CONFIG_DIR}"
 echo "   - ${INSTALL_DIR}"
 echo "   - ${CONFIG_DIR}"
 
-# --- 5. 复制应用程序文件 ---
-echo "🐍 正在复制 Python 脚本到 ${SCRIPT_DEST}..."
-cp "${SCRIPT_SOURCE}" "${SCRIPT_DEST}"
-chmod +x "${SCRIPT_DEST}"
+# --- 5. 复制应用程序文件 (修改处) ---
+echo "🐍 正在复制所有 .py 脚本到 ${INSTALL_DIR}..."
+
+# 检查是否存在 .py 文件
+if ls *.py 1> /dev/null 2>&1; then
+    cp *.py "${INSTALL_DIR}/"
+    chmod +x "${INSTALL_DIR}"/*.py
+    echo "   -> 已复制所有 Python 文件。"
+else
+    echo "❌ 错误：当前目录下没有找到 .py 文件！"
+    exit 1
+fi
 
 # --- 6. 创建默认配置文件 ---
 echo "📝 正在创建默认配置文件 ${CONFIG_FILE}..."
@@ -84,6 +96,7 @@ Description=HEPIC Server Data Acquisition Service
 After=network.target
 
 [Service]
+# 指向我们在变量中定义的 SCRIPT_ENTRY
 ExecStart=${VENV_DIR}/bin/python ${SCRIPT_DEST} ${CONFIG_FILE}
 User=${RUN_USER}
 Group=${RUN_GROUP}
@@ -101,37 +114,27 @@ ${PYTHON_PATH} -m venv "${VENV_DIR}"
 
 # --- 9. 在 Venv 中安装依赖 (使用 TUNA 镜像) ---
 echo "📦 正在虚拟环境中安装依赖 (numpy)... (使用 TUNA 镜像)"
-# 使用 Venv 内部的 pip, 并指定 TUNA 镜像
 "${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple numpy
-# 如果有其他依赖，在这里添加，例如: 
-# "${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple other-package
+# 如果你有其他依赖（比如 pyserial, requests），请在下面添加:
+# "${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple pyserial requests
 
-# --- 10. 修正文件权限 (修复 Bug 1) ---
+# --- 10. 修正文件权限 ---
 echo "🔐 正在设置 ${RUN_USER} 对 ${INSTALL_DIR} 的所有权..."
-# 这是必须的，以便 ${RUN_USER} 可以执行 venv 并读取脚本
 chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_DIR}"
 
 # --- 11. 启用并启动服务 ---
 echo "🔄 正在重新加载 systemd 并启动服务..."
-systemctl daemon-reload       # 告诉 systemd 扫描新文件
-systemctl enable "${APP_NAME}.service" # 设置为开机自启
-systemctl start "${APP_NAME}.service"  # 立即启动服务
+systemctl daemon-reload
+systemctl enable "${APP_NAME}.service"
+systemctl restart "${APP_NAME}.service"
 
 # --- 12. 完成 ---
 echo ""
 echo "✅ 安装完成!"
 echo "-------------------------------------------------------"
-echo "  服务已启动并设置为开机自启。"
+echo "  服务已启动。"
+echo "  主入口脚本: ${SCRIPT_DEST}"
 echo ""
-echo "  重要: 请用你的实际 IP 地址编辑配置文件:"
-echo "  sudo nano ${CONFIG_FILE}"
-echo ""
-echo "  编辑后，使用此命令重启服务:"
-echo "  sudo systemctl restart ${APP_NAME}.service"
-echo ""
-echo "  查看服务状态:"
-echo "  systemctl status ${APP_NAME}.service"
-echo ""
-echo "  实时查看日志 (推荐):"
+echo "  查看日志:"
 echo "  journalctl -u ${APP_NAME}.service -f"
 echo "-------------------------------------------------------"
