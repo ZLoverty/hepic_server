@@ -114,7 +114,7 @@ ${PYTHON_PATH} -m venv "${VENV_DIR}"
 
 # --- 9. 在 Venv 中安装依赖 (使用 TUNA 镜像) ---
 echo "📦 正在虚拟环境中安装依赖 (numpy)... (使用 TUNA 镜像)"
-"${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple numpy
+"${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple numpy gpiozero RPi.GPIO
 # 如果你有其他依赖（比如 pyserial, requests），请在下面添加:
 # "${VENV_DIR}/bin/pip" install -i https://pypi.tuna.tsinghua.edu.cn/simple pyserial requests
 
