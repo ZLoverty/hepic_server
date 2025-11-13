@@ -3,10 +3,9 @@ import numpy as np
 
 class MeterCountWorker:
     """This class reads the step of a rotary encoder. It takes in the pin_number on Raspberry Pi which connect to the output of the encoder, and the diameter of the wheel, and updates its internal variable self.meter_count."""
-    def __init__(self, PIN_A, PIN_B, diameter=30, print=False):
+    def __init__(self, PIN_A, PIN_B, print=False):
         self.meter_count = 0 # the variable, mm
         self.encoder = RotaryEncoder(PIN_A, PIN_B, max_steps=0)
-        self.diameter = diameter
         self.print = print
 
     def run(self):
@@ -15,9 +14,9 @@ class MeterCountWorker:
         try:
             while True:
                 self.encoder.wait_for_rotate()
-                self.meter_count = self.encoder.steps / 1000 * np.pi * self.diameter
+                self.meter_count = self.encoder.steps 
                 if self.print:
-                    print(f"当前距离：{self.meter_count}")
+                    print(f"当前步数：{self.meter_count}")
         except KeyboardInterrupt:
             print("程序退出。")
 
@@ -28,10 +27,6 @@ if __name__ == "__main__":
     PIN_B = 18
     mcw = MeterCountWorker(17, 18, print=True)
     mcw.run()
-    # 初始化编码器
-    #
-    # !! 注意：我们删除了 pull_up=True !!
-    # gpiozero 会自动在 GPIO 17 和 GPIO 18 上启用内部上拉电阻
             
 
     
