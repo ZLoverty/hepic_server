@@ -26,11 +26,18 @@ class PiServer:
         self.is_running = False
         self.server = None
         self.tasks = set()
+        self.METER_COUNT_WORKER_AVAILABLE = False
 
         # initiate workers that communicates with sensors and PC
         self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
-        self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
-        self.thread = threading.Thread(target=self.meter_count_worker.run)
+        try:
+            self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
+            self.METER_COUNT_WORKER_AVAILABLE = True
+        except Exception as e:
+            self.logger.error(f"Unable to initialize MeterCountWorker: {e}", exc_info=True)
+        
+        if self.METER_COUNT_WORKER_AVAILABLE:
+            self.thread = threading.Thread(target=self.meter_count_worker.run)
 
     def _load_config(self, path):
         """加载 JSON 配置文件"""
@@ -76,7 +83,10 @@ class PiServer:
                     else:
                         # read real data
                         weight = self.mettler_worker.weight
-                        meter = self.meter_count_worker.meter_count
+                        if self.METER_COUNT_WORKER_AVAILABLE:
+                            meter = self.meter_count_worker.meter_count
+                        else:
+                            meter = np.nan
              
                     message = {
                         "extrusion_force": weight * 9.8,
@@ -164,7 +174,8 @@ class PiServer:
     async def run(self):
         """启动服务器并监听信号"""
 
-        self.thread.start()
+        if self.METER_COUNT_WORKER_AVAILABLE:
+            self.thread.start()
         
         loop = asyncio.get_running_loop()
         # 为 SIGINT (Ctrl+C) 和 SIGTERM (来自 systemd) 添加信号处理器
@@ -201,10 +212,20 @@ class PiServer:
                 shutdown_signal.set_result(True)
             raise # 重新引发 CancelledError 很重要
         
+        except KeyboardInterrupt:
+            self.logger.error("Service interrupted by user.")
+            if not shutdown_signal.done():
+                shutdown_signal.set_result(True)
+
         except Exception as e:
             self.logger.error(f"unknow error, server shut down.")
             if not shutdown_signal.done():
                 shutdown_signal.set_result(True)
+                
+        finally:
+            self.logger.info("Server is closing.")
+            self.server.close()
+            await self.server.wait_closed()
 
 class MettlerWorker:
     """Grab weight data from the Mettler loadcell and store realtime data as a local variable."""
@@ -218,6 +239,7 @@ class MettlerWorker:
         self.logger = logger or logging.getLogger("MettlerWorker") # 使用传入的 logger
 
     async def run(self):
+        writer = None
         try:
             self.is_running = True
             self.logger.info(f"Opening connection to {self.ip}: {self.port}")
