@@ -23,6 +23,8 @@ class PiServer:
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.pin_a = self.config.get("pin_a")
         self.pin_b = self.config.get("pin_b")
+        self.logger.info(f"DEBUG: Loaded Pin A: {self.pin_a}, Type: {type(self.pin_a)}")
+        self.logger.info(f"DEBUG: Loaded Pin B: {self.pin_b}, Type: {type(self.pin_b)}")
         self.is_running = False
         self.server = None
         self.tasks = set()
