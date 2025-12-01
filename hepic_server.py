@@ -2,7 +2,6 @@ import asyncio
 import json
 import random
 import logging
-import logging.handlers
 import signal
 import sys
 from pathlib import Path
@@ -226,8 +225,9 @@ class PiServer:
                 
         finally:
             self.logger.info("Server is closing.")
-            self.server.close()
-            await self.server.wait_closed()
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
 
 class MettlerWorker:
     """Grab weight data from the Mettler loadcell and store realtime data as a local variable."""
