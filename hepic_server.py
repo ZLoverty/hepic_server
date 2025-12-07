@@ -39,6 +39,7 @@ class PiServer:
         
         if self.METER_COUNT_WORKER_AVAILABLE:
             self.thread = threading.Thread(target=self.meter_count_worker.run)
+            self.thread.daemon = True # 设为守护线程
 
     def _load_config(self, path):
         """加载 JSON 配置文件"""
@@ -150,10 +151,15 @@ class PiServer:
         """优雅地关闭服务器"""
         self.logger.info(f"receive close signal: {sig.name}. closing...")
         
-        # 停止接受新连接
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
+        # 2. 【新增】取消所有活跃的客户端连接任务
+        if self.tasks:
+            self.logger.info(f"Cancelling {len(self.tasks)} active client tasks...")
+            for task in self.tasks:
+                task.cancel()
+            # 等待它们响应取消并清理
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+
+        
 
         # 2. 主动停止所有 worker
         self.logger.info("Stopping internal workers...")
@@ -169,6 +175,11 @@ class PiServer:
                 self.mettler_task.cancel()
             except Exception as e:
                 self.logger.error(f"Error during worker shutdown: {e}")
+
+        # 停止接受新连接
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
 
         self.logger.info("Shutdown complete.")
 
