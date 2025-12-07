@@ -158,12 +158,10 @@ class PiServer:
             # 等待它们响应取消并清理
             await asyncio.gather(*self.tasks, return_exceptions=True)
 
-        
-
         # 2. 主动停止所有 worker
         self.logger.info("Stopping internal workers...")
         if hasattr(self, 'mettler_task'): # 检查任务是否存在
-            self.mettler_worker.stop()
+            self.logger.info("Mettler task stopped.")
             # self.meter_count_worker.stop() # 将来也停止它
             
             # 等待 worker 任务完成
@@ -177,7 +175,9 @@ class PiServer:
 
         # 停止接受新连接
         if self.server:
+            self.logger.info("closing server")
             self.server.close()
+            self.logger.info("waiting server to close")
             await self.server.wait_closed()
 
         self.logger.info("Shutdown complete.")
@@ -196,7 +196,7 @@ class PiServer:
         self.is_running = True
 
         if not self.test_mode:
-            mettler_task = asyncio.create_task(self.mettler_worker.run())
+            self.mettler_task = asyncio.create_task(self.mettler_worker.run())
             
             # self.meter_count_worker.run()
 
@@ -232,12 +232,8 @@ class PiServer:
             self.logger.error(f"unknow error, server shut down.")
             if not shutdown_signal.done():
                 shutdown_signal.set_result(True)
-                
         finally:
-            self.logger.info("Server is closing.")
-            if self.server:
-                self.server.close()
-                await self.server.wait_closed()
+            self.logger.info("Server is closed.")
 
 def main():
     parser = argparse.ArgumentParser(description="Pi data server TCP")

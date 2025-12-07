@@ -11,20 +11,21 @@ class MettlerWorker:
         self.is_running = False
         self.weight = float("nan")
         self.logger = logger or logging.getLogger("MettlerWorker") # 使用传入的 logger
+        self.writer = None
 
     async def run(self):
-        writer = None
+        
         try:
             self.is_running = True
             self.logger.info(f"Opening connection to {self.ip}: {self.port}")
-            reader, writer = await asyncio.wait_for(
+            reader, self.writer = await asyncio.wait_for(
                 asyncio.open_connection(self.ip, self.port), 
                 timeout=2.0
             )
             while self.is_running:
                 self.logger.debug(f"send \"{self.command.strip()}\" to {self.ip}: {self.port}")
-                writer.write(self.command.encode("ascii"))
-                await writer.drain()
+                self.writer.write(self.command.encode("ascii"))
+                await self.writer.drain()
                 response_bytes = await asyncio.wait_for(
                     reader.read(1024), 
                     timeout=2.0
@@ -42,11 +43,7 @@ class MettlerWorker:
         except Exception as e:
             self.logger.error(f"Mettler worker error: {e}", exc_info=True)
         finally:
-            if writer: # make sure connection has been established once
-                self.is_running = False
-                self.logger.info("Closing Mettler connection.")
-                writer.close()
-                await writer.wait_closed()
+            self.logger.info("Mettler worker closed.")
 
     def parse_six1_response(self, response_str):
         """
@@ -73,5 +70,11 @@ class MettlerWorker:
             self.logger.error(f"错误：解析响应时出错: {e}\n原始响应: {response_str}")
             return None
         
-    def stop(self):
+    async def stop(self):
+        self.logger.info("Setting is_running to False")
         self.is_running = False
+        if self.writer: # make sure connection has been established once
+            self.logger.info("closing writer")
+            self.writer.close()
+            self.logger.info("waiting writer to close")
+            await self.writer.wait_closed()

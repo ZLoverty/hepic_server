@@ -19,6 +19,7 @@ class MeterCountWorker:
                     self.logger.debug(f"当前步数：{self.meter_count}")
         except KeyboardInterrupt:
             self.logger.info("程序退出。")
+        
 
 if __name__ == "__main__":
 
