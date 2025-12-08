@@ -25,18 +25,13 @@ class PiServer:
         self.logger.info(f"DEBUG: Loaded Pin B: {self.pin_b}, Type: {type(self.pin_b)}")
         self.is_running = False
         self.server = None
-        self.tasks = set()
+        self.client_tasks = set()
         self.METER_COUNT_WORKER_AVAILABLE = False
 
         # initiate workers that communicates with sensors and PC
-        self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
-        try:
+        if not self.test_mode:
+            self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
             self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
-            self.METER_COUNT_WORKER_AVAILABLE = True
-        except Exception as e:
-            self.logger.error(f"Unable to initialize MeterCountWorker: {e}", exc_info=True)
-        
-        if self.METER_COUNT_WORKER_AVAILABLE:
             self.thread = threading.Thread(target=self.meter_count_worker.run)
             self.thread.daemon = True # 设为守护线程
 
@@ -44,7 +39,7 @@ class PiServer:
         """加载 JSON 配置文件"""
         config_file = Path(path).expanduser()
         if not config_file.is_file():
-            self.logger.error(f"错误：配置文件 {path} 未找到！", file=sys.stderr)
+            print(f"错误：配置文件 {path} 未找到！", file=sys.stderr)
             sys.exit(1)
         with open(config_file, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -70,13 +65,13 @@ class PiServer:
 
         self.logger.info(f"accepting new link from {peer_addr}")
 
-        shutdown_signal = asyncio.Future()
+        current_task = asyncio.current_task()
+        self.client_tasks.add(current_task)
 
         async def send_loop():
             """周期性地发送数据给客户端"""
-
-            while not shutdown_signal.done():
-                try:
+            try:
+                while True:
                     if self.test_mode: 
                         # generate random data
                         weight = 2 + random.uniform(-.2, .2)
@@ -84,11 +79,8 @@ class PiServer:
                     else:
                         # read real data
                         weight = self.mettler_worker.weight
-                        if self.METER_COUNT_WORKER_AVAILABLE:
-                            meter = self.meter_count_worker.meter_count
-                        else:
-                            meter = float("nan")
-             
+                        meter = self.meter_count_worker.meter_count
+         
                     message = {
                         "extrusion_force": weight * 9.8,
                         "meter_count": meter
@@ -99,64 +91,93 @@ class PiServer:
                     await writer.drain()             
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
 
-                except (ConnectionResetError, BrokenPipeError) as e:
-                    self.logger.warning(f"disconnect from {peer_addr}: {e}")
-                    if not shutdown_signal.done():
-                        shutdown_signal.set_result(True)
-                except KeyboardInterrupt:
-                    self.logger.error("\n程序被用户中断。")
-                    sys.exit(1)
-                except Exception as e:
-                    self.logger.error(f"unknow error sending to {peer_addr}: {e}", exc_info=True)
-                    if not shutdown_signal.done():
-                        shutdown_signal.set_result(True)
+            except (ConnectionResetError, BrokenPipeError) as e:
+                self.logger.warning(f"disconnect from {peer_addr}: {e}")
+                raise
+            except KeyboardInterrupt:
+                self.logger.error("\n程序被用户中断。")
+                raise
+            except asyncio.CancelledError:
+                self.logger.info("Send loop cancelled.")
+                raise
+            except Exception as e:
+                self.logger.error(f"unknow error sending to {peer_addr}: {e}", exc_info=True)
+                raise
 
         async def receive_loop():
             """从客户端接收数据"""
             try:
-                while not shutdown_signal.done():
-                        data = await reader.read(1024)
-                        if not data:
-                            self.logger.info(f"client {peer_addr} has disconnected")
-                            if not shutdown_signal.done():
-                                shutdown_signal.set_result(True)
-                        message = data.decode().strip()
-                        self.logger.info(f"received from {peer_addr}: {message!r}")
+                while True:
+                    data = await reader.read(1024)
+                    if not data:
+                        self.logger.info(f"client {peer_addr} has disconnected")
+                        break
+                    message = data.decode().strip()
+                    self.logger.info(f"received from {peer_addr}: {message!r}")
             except ConnectionResetError:
                 # 这是关键：捕获错误
                 self.logger.error(f"Client {peer_addr} forcibly closed connection (Connection reset).")
+                raise
+            except asyncio.CancelledError:
+                self.logger.info("Receive loop cancelled.")
+                raise
             except Exception as e:
                 self.logger.error(f"error when receiving from {peer_addr}: {e}", exc_info=True)
-                if not shutdown_signal.done():
-                    shutdown_signal.set_result(True)
+                raise
 
-        send_task = asyncio.create_task(send_loop())
-        receive_task = asyncio.create_task(receive_loop())
-        self.tasks.add(send_task)
-        self.tasks.add(receive_task)
 
-        await shutdown_signal
+        try:
+            send_task = asyncio.create_task(send_loop())
+            receive_task = asyncio.create_task(receive_loop())
+
+            done, pending = await asyncio.wait(
+                [send_task, receive_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
         
-        send_task.cancel()
-        receive_task.cancel()
-        self.tasks.remove(send_task)
-        self.tasks.remove(receive_task)
+        except asyncio.CancelledError:
+            self.logger.info(f"Connection handler for {peer_addr} cancelled.")
         
-        self.logger.info(f"close connection from {peer_addr}")
-        writer.close()
-        await writer.wait_closed()
+        except Exception as e:
+            self.logger.error(f"Handler exception: {e}")
+
+        finally:
+            for task in [send_task, receive_task]:
+                if task and not task.done():
+                    task.cancel()
+            
+            # wait for tasks to complete
+            if send_task or receive_task:
+                await asyncio.gather(send_task, receive_task, return_exceptions=True)
+
+            # close socket
+            self.logger.info("Close socket ...")
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except:
+                pass
+
+            self.client_tasks.discard(current_task)
 
     async def _shutdown(self, sig):
         """优雅地关闭服务器"""
         self.logger.info(f"receive close signal: {sig.name}. closing...")
         
+        # 停止接受新连接
+        if self.server:
+            self.logger.info("closing server")
+            self.server.close()
+            self.logger.info("waiting server to close")
+            await asyncio.wait_for(self.server.wait_closed(), timeout=2.0)
+
         # 2. 【新增】取消所有活跃的客户端连接任务
-        if self.tasks:
+        if self.client_tasks:
             self.logger.info(f"Cancelling {len(self.tasks)} active client tasks...")
-            for task in self.tasks:
+            for task in list(self.client_tasks):
                 task.cancel()
             # 等待它们响应取消并清理
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+            await asyncio.gather(*self.client_tasks, return_exceptions=True)
 
         # 2. 主动停止所有 worker
         self.logger.info("Stopping internal workers...")
@@ -173,14 +194,8 @@ class PiServer:
             except Exception as e:
                 self.logger.error(f"Error during worker shutdown: {e}")
 
-        # 停止接受新连接
-        if self.server:
-            self.logger.info("closing server")
-            self.server.close()
-            self.logger.info("waiting server to close")
-            await self.server.wait_closed()
-
         self.logger.info("Shutdown complete.")
+        asyncio.get_running_loop().stop()
 
     async def run(self):
         """启动服务器并监听信号"""
@@ -193,14 +208,10 @@ class PiServer:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
 
-        self.is_running = True
-
         if not self.test_mode:
             self.mettler_task = asyncio.create_task(self.mettler_worker.run())
             
             # self.meter_count_worker.run()
-
-        shutdown_signal = asyncio.Future()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
@@ -210,32 +221,18 @@ class PiServer:
             addrs = ', '.join(str(sock.getsockname()) for sock in self.server.sockets)
             self.logger.info(f"server start listening {addrs}")
             await self.server.serve_forever()
-
-        except (ConnectionResetError, BrokenPipeError) as e:
-            self.logger.warning(f"Connection error.")
-            if not shutdown_signal.done():
-                shutdown_signal.set_result(True)
-
         except asyncio.CancelledError:
-            # 这是 _shutdown 触发的正常关闭
-            self.logger.debug(f"Server shutdown.")
-            if not shutdown_signal.done():
-                shutdown_signal.set_result(True)
-            raise # 重新引发 CancelledError 很重要
-        
-        except KeyboardInterrupt:
-            self.logger.error("Service interrupted by user.")
-            if not shutdown_signal.done():
-                shutdown_signal.set_result(True)
+            pass
 
         except Exception as e:
-            self.logger.error(f"unknow error, server shut down.")
-            if not shutdown_signal.done():
-                shutdown_signal.set_result(True)
+            self.logger.error(f"Server exception: {e}")
         finally:
-            self.logger.info("Server is closed.")
+            # 确保最后 server 也是关闭的
+            if self.server:
+                self.server.close()
 
 def main():
+
     parser = argparse.ArgumentParser(description="Pi data server TCP")
 
     parser.add_argument("config_file", type=str, help="path to the config json file.")
@@ -243,6 +240,7 @@ def main():
     args = parser.parse_args()
     
     server_app = PiServer(args.config_file, test_mode=args.test_mode)
+
     try:
         asyncio.run(server_app.run())
     except (KeyboardInterrupt, SystemExit):
