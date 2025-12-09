@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hepic_server"
 version = "0.2.0"  # <--- 在这里管理版本
-description = "A robust async TCP server for Pi sensors"
+description = "A robust async TCP server for HEPiC system. It runs on Raspberry Pi and communicates with Mettler load cell and meter counter."
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
-  {name = "Your Name", email = "you@example.com"}
+  {name = "Zhengyang Liu", email = "liuzy19911112@gmail.com"}
 ]
 dependencies = [
 ]

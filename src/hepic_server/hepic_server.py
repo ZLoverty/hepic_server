@@ -234,11 +234,19 @@ class PiServer:
                 self.server.close()
 
 def main():
+    from importlib.metadata import version, PackageNotFoundError
+    package_name = "hepic_server"
+    try:
+        # 只有当包被 pip install (包括 pip install -e .) 后才能读到
+        __version__ = version(package_name)
+    except PackageNotFoundError:
+        # 如果是直接 python server.py 运行且未安装，给个默认值
+        __version__ = "dev-local"
 
     parser = argparse.ArgumentParser(description="Pi data server TCP")
-
     parser.add_argument("config_file", type=str, help="path to the config json file.")
     parser.add_argument("-t", "--test_mode", help="test mode switch", action="store_true")
+    parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {__version__}")
     args = parser.parse_args()
     
     server_app = PiServer(args.config_file, test_mode=args.test_mode)
