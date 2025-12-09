@@ -1,12 +1,14 @@
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent))
+from workers import MettlerWorker, MeterCountWorker
 import asyncio
 import json
 import random
 import logging
 import signal
-import sys
-from pathlib import Path
 import argparse
-from .workers import MettlerWorker, MeterCountWorker
+
 import threading
 
 class PiServer:
@@ -169,11 +171,11 @@ class PiServer:
             self.logger.info("closing server")
             self.server.close()
             self.logger.info("waiting server to close")
-            await asyncio.wait_for(self.server.wait_closed(), timeout=2.0)
+            # await asyncio.wait_for(self.server.wait_closed(), timeout=2.0)
 
         # 2. 【新增】取消所有活跃的客户端连接任务
         if self.client_tasks:
-            self.logger.info(f"Cancelling {len(self.tasks)} active client tasks...")
+            self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks...")
             for task in list(self.client_tasks):
                 task.cancel()
             # 等待它们响应取消并清理
