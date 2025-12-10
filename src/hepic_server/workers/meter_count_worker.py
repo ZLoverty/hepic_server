@@ -1,24 +1,25 @@
 from gpiozero import RotaryEncoder
-import numpy as np
+import logging
 
 class MeterCountWorker:
     """This class reads the step of a rotary encoder. It takes in the pin_number on Raspberry Pi which connect to the output of the encoder, and the diameter of the wheel, and updates its internal variable self.meter_count."""
-    def __init__(self, PIN_A, PIN_B, print=False):
+    def __init__(self, PIN_A, PIN_B, print=False, logger=None):
         self.meter_count = 0 # the variable, mm
         self.encoder = RotaryEncoder(PIN_A, PIN_B, max_steps=0)
         self.print = print
 
+        self.logger = logger or logging.getLogger(__name__)
+
     def run(self):
-        # raise NotImplementedError
-        # print(f"当前步数: {encoder.steps}")
         try:
             while True:
                 self.encoder.wait_for_rotate()
                 self.meter_count = self.encoder.steps 
                 if self.print:
-                    print(f"当前步数：{self.meter_count}")
+                    self.logger.debug(f"当前步数：{self.meter_count}")
         except KeyboardInterrupt:
-            print("程序退出。")
+            self.logger.info("程序退出。")
+        
 
 if __name__ == "__main__":
 
