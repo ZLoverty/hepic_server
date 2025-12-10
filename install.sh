@@ -29,7 +29,7 @@ VENV_DIR="${INSTALL_DIR}/venv"
 SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_ENTRY}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
-
+SRC="src/hepic_server"
 RUN_USER="${SUDO_USER:-pi}"
 RUN_GROUP=$(id -gn "${RUN_USER}")
 
@@ -61,8 +61,8 @@ echo "   - ${CONFIG_DIR}"
 echo "🐍 正在复制所有 .py 脚本到 ${INSTALL_DIR}..."
 
 # 检查是否存在 .py 文件
-if ls *.py 1> /dev/null 2>&1; then
-    cp *.py "${INSTALL_DIR}/"
+if ls "${SRC}/*.py" 1> /dev/null 2>&1; then
+    cp "${SRC}/*.py" "${INSTALL_DIR}/"
     chmod +x "${INSTALL_DIR}"/*.py
     echo "   -> 已复制所有 Python 文件。"
 else
@@ -74,15 +74,7 @@ fi
 echo "📝 正在创建默认配置文件 ${CONFIG_FILE}..."
 
 if [ ! -f "${CONFIG_FILE}" ]; then
-  cat > "${CONFIG_FILE}" << EOL
-{
-    "host": "0.0.0.0",
-    "port": 10001,
-    "send_delay": 0.01,
-    "log_level": "INFO",
-    "mettler_ip": "192.168.0.8" 
-}
-EOL
+  cp "${SRC}/config.json" "${CONFIG_FILE}" 
   echo "   -> 默认配置已创建。请稍后编辑此文件！"
 else
   echo "   -> 配置文件 ${CONFIG_FILE} 已存在，跳过创建。"
