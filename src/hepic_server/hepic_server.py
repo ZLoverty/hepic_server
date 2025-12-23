@@ -28,7 +28,8 @@ class PiServer:
         self.is_running = False
         self.server = None
         self.client_tasks = set()
-        self.METER_COUNT_WORKER_AVAILABLE = False
+        # self.METER_COUNT_WORKER_AVAILABLE = False
+        self.meter_count_worker = None
 
         # initiate workers that communicates with sensors and PC
         if not self.test_mode:
@@ -202,7 +203,7 @@ class PiServer:
     async def run(self):
         """启动服务器并监听信号"""
 
-        if self.METER_COUNT_WORKER_AVAILABLE:
+        if self.meter_count_worker:
             self.thread.start()
         
         loop = asyncio.get_running_loop()
@@ -212,8 +213,6 @@ class PiServer:
 
         if not self.test_mode:
             self.mettler_task = asyncio.create_task(self.mettler_worker.run())
-            
-            # self.meter_count_worker.run()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
