@@ -6,4 +6,7 @@
 
 ## v0.2.1
 
+- Updated installation script and installation guide in readme.
 - Fix the meter counter not connected issue.
+
+
