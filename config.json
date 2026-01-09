@@ -6,5 +6,6 @@
     "mettler_ip": "192.168.0.8",
     "mettler_port": 1026,
     "pin_a": 17,
-    "pin_b": 18
+    "pin_b": 18,
+    "test_mode": true
 }

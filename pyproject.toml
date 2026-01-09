@@ -18,3 +18,9 @@ dependencies = [
 [project.scripts]
 # 格式：命令名 = "包名.模块名:函数名"
 hepic_server = "hepic_server.hepic_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]  # 代码在当前目录
+include = ["hepic_server*"]  # 只包含 HEPiC 文件夹
+exclude = ["release_notes*", "tests*", "docs*"]  # 明确排除 notebooks
+namespaces = false

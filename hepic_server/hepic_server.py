@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent))
-from workers import MettlerWorker, MeterCountWorker
 import asyncio
 import json
 import random
@@ -16,10 +15,10 @@ class PiServer:
     一个健壮的、可作为服务运行的异步TCP服务器。
     它从配置文件加载设置，使用专业的日志系统，并能优雅地处理关闭信号。
     """
-    def __init__(self, config_path, test_mode=False):
+    def __init__(self, config_path):
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
-        self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from sensors
+        self.test_mode = self.config.get("test_mode") # if test_mode is True, generate random numbers instead of read data from sensors
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.pin_a = self.config.get("pin_a")
         self.pin_b = self.config.get("pin_b")
@@ -33,6 +32,8 @@ class PiServer:
 
         # initiate workers that communicates with sensors and PC
         if not self.test_mode:
+            from mettler_worker import MettlerWorker
+            from meter_count_worker import MeterCountWorker
             self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
             self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
             self.thread = threading.Thread(target=self.meter_count_worker.run)
@@ -244,11 +245,10 @@ def main():
 
     parser = argparse.ArgumentParser(description="Pi data server TCP")
     parser.add_argument("config_file", type=str, help="path to the config json file.")
-    parser.add_argument("-t", "--test_mode", help="test mode switch", action="store_true")
     parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {__version__}")
     args = parser.parse_args()
     
-    server_app = PiServer(args.config_file, test_mode=args.test_mode)
+    server_app = PiServer(args.config_file)
 
     try:
         asyncio.run(server_app.run())
