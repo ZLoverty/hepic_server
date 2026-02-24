@@ -29,7 +29,7 @@ VENV_DIR="${INSTALL_DIR}/venv"
 SCRIPT_DEST="${INSTALL_DIR}/${SCRIPT_ENTRY}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
-SRC="src/hepic_server"
+SRC="hepic_server"
 RUN_USER="${SUDO_USER:-pi}"
 RUN_GROUP=$(id -gn "${RUN_USER}")
 
@@ -61,20 +61,20 @@ echo "   - ${CONFIG_DIR}"
 # echo "🐍 正在复制所有 .py 脚本到 ${INSTALL_DIR}..."
 
 # 检查是否存在 .py 文件
-# if ls "${SRC}/*.py" 1> /dev/null 2>&1; then
-#     cp "${SRC}/*.py" "${INSTALL_DIR}/"
-#     chmod +x "${INSTALL_DIR}"/*.py
-#     echo "   -> 已复制所有 Python 文件。"
-# else
-#     echo "❌ 错误：当前目录下没有找到 .py 文件！"
-#     exit 1
-# fi
+if find "${SRC}" -type f -name "*.py" | grep -q .; then
+    find "${SRC}" -type f -name "*.py" -exec cp --parents {} "${INSTALL_DIR}/" \;
+    find "${INSTALL_DIR}/${SRC}" -type f -name "*.py" -exec chmod +x {} \;
+    echo "   -> 已复制所有 Python 文件。"
+else
+    echo "❌ 错误：当前目录下没有找到 .py 文件！"
+    exit 1
+fi
 
 # --- 6. 创建默认配置文件 ---
 echo "📝 正在创建默认配置文件 ${CONFIG_FILE}..."
 
 if [ ! -f "${CONFIG_FILE}" ]; then
-  cp "${SRC}/config.json" "${CONFIG_FILE}" 
+  cp "config.json" "${CONFIG_FILE}" 
   echo "   -> 默认配置已创建。请稍后编辑此文件！"
 else
   echo "   -> 配置文件 ${CONFIG_FILE} 已存在，跳过创建。"

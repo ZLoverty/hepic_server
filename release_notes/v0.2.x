@@ -9,4 +9,9 @@
 - Updated installation script and installation guide in readme.
 - Fix the meter counter not connected issue.
 
+## v0.2.2
+
+- Adapt install script to new folder structure
+- Use terminal -t flag to enable test mode rather than config file
+
 

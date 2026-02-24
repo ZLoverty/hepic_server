@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent))
-from workers import MettlerWorker, MeterCountWorker
 import asyncio
 import json
 import random
@@ -19,7 +18,8 @@ class PiServer:
     def __init__(self, config_path, test_mode=False):
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
-        self.test_mode = test_mode # if test_mode is True, generate random numbers instead of read data from sensors
+        # test mode is now controlled by CLI flag (-t/--test), not config file.
+        self.test_mode = bool(test_mode)
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.pin_a = self.config.get("pin_a")
         self.pin_b = self.config.get("pin_b")
@@ -33,6 +33,8 @@ class PiServer:
 
         # initiate workers that communicates with sensors and PC
         if not self.test_mode:
+            from mettler_worker import MettlerWorker
+            from meter_count_worker import MeterCountWorker
             self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
             self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
             self.thread = threading.Thread(target=self.meter_count_worker.run)
@@ -244,11 +246,16 @@ def main():
 
     parser = argparse.ArgumentParser(description="Pi data server TCP")
     parser.add_argument("config_file", type=str, help="path to the config json file.")
-    parser.add_argument("-t", "--test_mode", help="test mode switch", action="store_true")
+    parser.add_argument(
+        "-t",
+        "--test",
+        action="store_true",
+        help="enable test mode: generate random values instead of reading sensors",
+    )
     parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {__version__}")
     args = parser.parse_args()
     
-    server_app = PiServer(args.config_file, test_mode=args.test_mode)
+    server_app = PiServer(args.config_file, test_mode=args.test)
 
     try:
         asyncio.run(server_app.run())
