@@ -15,10 +15,11 @@ class PiServer:
     一个健壮的、可作为服务运行的异步TCP服务器。
     它从配置文件加载设置，使用专业的日志系统，并能优雅地处理关闭信号。
     """
-    def __init__(self, config_path):
+    def __init__(self, config_path, test_mode=False):
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
-        self.test_mode = self.config.get("test_mode") # if test_mode is True, generate random numbers instead of read data from sensors
+        # test mode is now controlled by CLI flag (-t/--test), not config file.
+        self.test_mode = bool(test_mode)
         self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
         self.pin_a = self.config.get("pin_a")
         self.pin_b = self.config.get("pin_b")
@@ -245,10 +246,16 @@ def main():
 
     parser = argparse.ArgumentParser(description="Pi data server TCP")
     parser.add_argument("config_file", type=str, help="path to the config json file.")
+    parser.add_argument(
+        "-t",
+        "--test",
+        action="store_true",
+        help="enable test mode: generate random values instead of reading sensors",
+    )
     parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {__version__}")
     args = parser.parse_args()
     
-    server_app = PiServer(args.config_file)
+    server_app = PiServer(args.config_file, test_mode=args.test)
 
     try:
         asyncio.run(server_app.run())
