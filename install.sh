@@ -61,9 +61,9 @@ echo "   - ${CONFIG_DIR}"
 # echo "🐍 正在复制所有 .py 脚本到 ${INSTALL_DIR}..."
 
 # 检查是否存在 .py 文件
-if ls "${SRC}/*.py" 1> /dev/null 2>&1; then
-    cp "${SRC}/*.py" "${INSTALL_DIR}/"
-    chmod +x "${INSTALL_DIR}"/*.py
+if find "${SRC}" -type f -name "*.py" | grep -q .; then
+    find "${SRC}" -type f -name "*.py" -exec cp --parents {} "${INSTALL_DIR}/" \;
+    find "${INSTALL_DIR}/${SRC}" -type f -name "*.py" -exec chmod +x {} \;
     echo "   -> 已复制所有 Python 文件。"
 else
     echo "❌ 错误：当前目录下没有找到 .py 文件！"
