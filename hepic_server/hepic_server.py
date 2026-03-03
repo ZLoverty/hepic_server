@@ -26,6 +26,9 @@ class PiServer:
         self.sensors = {}
         self._sensors_initialized = False
         self.test_sensor_ids: list[str] = []
+        self.sensor_name_by_id: dict[str, str] = {}
+
+        self.sensor_name_by_id = self._load_sensor_name_map()
 
         if self.test_mode:
             self.test_sensor_ids = self._load_test_sensor_ids()
@@ -121,18 +124,33 @@ class PiServer:
         )
 
     def _load_test_sensor_ids(self) -> list[str]:
-        config_path = self._resolve_sensors_config_path()
+        if self.sensor_name_by_id:
+            sensor_ids = list(self.sensor_name_by_id.keys())
+            self.logger.info(f"Loaded {len(sensor_ids)} test sensor ids from sensors config")
+            return sensor_ids
+        return ["loadcell_01", "rotary_encoder_01"]
+
+    def _load_sensor_name_map(self) -> dict[str, str]:
         try:
             import yaml
+
+            config_path = self._resolve_sensors_config_path()
             with open(config_path, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
-            sensor_ids = [item["id"] for item in cfg.get("sensors", []) if isinstance(item, dict) and "id" in item]
-            if sensor_ids:
-                self.logger.info(f"Loaded {len(sensor_ids)} test sensor ids from {config_path}")
-                return sensor_ids
+            mapping: dict[str, str] = {}
+            for item in cfg.get("sensors", []):
+                if not isinstance(item, dict):
+                    continue
+                sensor_id = item.get("id")
+                sensor_name = item.get("name") or sensor_id
+                if sensor_id:
+                    mapping[str(sensor_id)] = str(sensor_name)
+            if mapping:
+                self.logger.info(f"Loaded {len(mapping)} sensor names from {config_path}")
+            return mapping
         except Exception as e:
-            self.logger.warning(f"Failed to load test sensor ids from {config_path}: {e}")
-        return ["loadcell_01", "rotary_encoder_01"]
+            logging.getLogger("TCPServer").warning(f"Failed to load sensor names from sensors config: {e}")
+            return {}
 
     def _initialize_sensors(self):
         if self.test_mode or self._sensors_initialized:
@@ -164,7 +182,7 @@ class PiServer:
                 continue
             if result is None:
                 continue
-            payload[sensor_id] = float(result)
+            payload[self.sensor_name_by_id.get(sensor_id, sensor_id)] = float(result)
         return payload
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -180,7 +198,7 @@ class PiServer:
                 while True:
                     if self.test_mode:
                         message = {
-                            sensor_id: 2 + random.uniform(-0.2, 0.2)
+                            self.sensor_name_by_id.get(sensor_id, sensor_id): 2 + random.uniform(-0.2, 0.2)
                             for sensor_id in self.test_sensor_ids
                         }
                     else:
