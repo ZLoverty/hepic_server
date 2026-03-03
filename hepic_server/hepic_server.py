@@ -17,6 +17,7 @@ except ImportError:
 
 class PiServer:
     def __init__(self, config_path: str, test_mode: bool = False):
+        self.config_file_path = Path(config_path).expanduser().resolve()
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
         self.test_mode = bool(test_mode)
@@ -24,6 +25,10 @@ class PiServer:
         self.client_tasks: set[asyncio.Task] = set()
         self.sensors = {}
         self._sensors_initialized = False
+        self.test_sensor_ids: list[str] = []
+
+        if self.test_mode:
+            self.test_sensor_ids = self._load_test_sensor_ids()
 
     def _load_config(self, path: str) -> dict:
         config_file = Path(path).expanduser()
@@ -50,14 +55,84 @@ class PiServer:
         return logger
 
     def _load_sensors(self):
-        config_path = self.config.get("sensors_config")
-        if config_path is None:
-            config_path = Path(__file__).resolve().parent.parent / "sensors_config.yaml"
-        else:
-            config_path = Path(config_path).expanduser()
+        config_path = self._resolve_sensors_config_path()
         sensors = load_sensors_from_yaml(config_path)
         self.logger.info(f"Loaded {len(sensors)} sensors from {config_path}")
         return sensors
+
+    def _candidate_sensors_config_paths(self) -> list[Path]:
+        candidates: list[Path] = []
+
+        configured = self.config.get("sensors_config")
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.is_absolute():
+                candidates.append(configured_path)
+            else:
+                # Prefer path relative to config file directory, then cwd.
+                candidates.append(self.config_file_path.parent / configured_path)
+                candidates.append(Path.cwd() / configured_path)
+
+        # Linux deploy convention: config under /etc.
+        candidates.extend(
+            [
+                Path("/etc/sensors_config.yaml"),
+                Path("/etc/hepic_server/sensors_config.yaml"),
+                Path("/etc/hepic/sensors_config.yaml"),
+            ]
+        )
+
+        # Repo/dev run: project root and package dir.
+        project_root = Path(__file__).resolve().parent.parent
+        package_dir = Path(__file__).resolve().parent
+        candidates.extend(
+            [
+                project_root / "sensors_config.yaml",
+                package_dir / "sensors_config.yaml",
+            ]
+        )
+
+        # Raspberry Pi deploy fallback (/opt layout).
+        candidates.extend(
+            [
+                Path("/opt/sensors_config.yaml"),
+                Path("/opt/hepic_server/sensors_config.yaml"),
+                Path("/opt/hepic/sensors_config.yaml"),
+            ]
+        )
+
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(path)
+        return deduped
+
+    def _resolve_sensors_config_path(self) -> Path:
+        for candidate in self._candidate_sensors_config_paths():
+            if candidate.is_file():
+                return candidate
+        candidates = [str(p) for p in self._candidate_sensors_config_paths()]
+        raise FileNotFoundError(
+            "sensors_config.yaml not found. Checked: " + "; ".join(candidates)
+        )
+
+    def _load_test_sensor_ids(self) -> list[str]:
+        config_path = self._resolve_sensors_config_path()
+        try:
+            import yaml
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            sensor_ids = [item["id"] for item in cfg.get("sensors", []) if isinstance(item, dict) and "id" in item]
+            if sensor_ids:
+                self.logger.info(f"Loaded {len(sensor_ids)} test sensor ids from {config_path}")
+                return sensor_ids
+        except Exception as e:
+            self.logger.warning(f"Failed to load test sensor ids from {config_path}: {e}")
+        return ["loadcell_01", "rotary_encoder_01"]
 
     def _initialize_sensors(self):
         if self.test_mode or self._sensors_initialized:
@@ -105,8 +180,8 @@ class PiServer:
                 while True:
                     if self.test_mode:
                         message = {
-                            "loadcell_01": 2 + random.uniform(-0.2, 0.2),
-                            "rotary_encoder_01": 2 + random.uniform(-0.2, 0.2),
+                            sensor_id: 2 + random.uniform(-0.2, 0.2)
+                            for sensor_id in self.test_sensor_ids
                         }
                     else:
                         message = await self._poll_reachable_sensors()
