@@ -42,7 +42,7 @@ class MettlerSensor(SensorBase):
             self.logger.debug(f"Unexpected Mettler response: {response_str!r}")
             return None
         try:
-            return float(parts[self.weight_position])
+            return float(parts[self.weight_position] * 9.81)
         except (IndexError, ValueError) as e:
             self.logger.error(f"Failed to parse Mettler response: {e}; raw={response_str!r}")
             return None
@@ -72,7 +72,7 @@ class RS485Sensor(SensorBase):
             registers = getattr(response, "registers", None)
             if not registers:
                 return None
-            return self.parse_modbus_registers(registers)
+            return self.parse_modbus_registers(registers) * 9.81
         except Exception as e:
             self.logger.error(f"Failed to read RS485 sensor: {e}")
             return None
