@@ -3,33 +3,44 @@
 # 1. 定义物理网关/接口（解决“怎么连”的问题）
 gateways:
   - id: "rs485_bus_1"
-    type: "serial"
+    type: "modbus"
     port: "/dev/ttyUSB0"
     baudrate: 9600
-    timeout: 1
 
   - id: "network_gateway"
-    type: "http"
+    type: "tcp"
     ip: "192.168.0.8"
     port: 26
 
   - id: "rpi_gpio"
-    type: "rotary_encoder_gpio"
+    type: "rotary_encoder"
     pin_a: 17
     pin_b: 18
 
 # 2. 定义具体的传感器列表（解决“有哪些”的问题）
 sensors:
-  - id: "loadcell_01"
+  - name: "挤出力"
+    id: "loadcell_01"
     gateway_id: "network_gateway"  # 引用上面定义的接口
-    protocol: "tcp"     # 指定通讯协议
+    protocol: "mettler"     # 指定通讯协议
     params:
       command_hex: "53490D0A"                # Modbus 从机地址
       weight_position: 3  # 从返回数据中解析重量的位置信息
 
-  - id: "rotary_encoder_01"
+  - name: "计米器"
+    id: "rotary_encoder_01"
     gateway_id: "rpi_gpio"
-    protocol: "quadrature_encoder"
+    protocol: "rotary_encoder"
     params:
       pulses_per_revolution: 1000
       diameter_mm: 28.4
+
+  - name: "挤出力_RS485"
+    id: "loadcell_02"
+    gateway_id: "rs485_bus_1"
+    protocol: "modbus"
+    params:
+      address: 0
+      count: 2
+      dev_id: 2
+      decimal_places: 3

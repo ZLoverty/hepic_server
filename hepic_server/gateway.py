@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import aiohttp
 from pymodbus.client import AsyncModbusSerialClient
 from pymodbus.exceptions import ModbusException
 import logging
@@ -101,13 +100,18 @@ class ModbusGateway:
 
 class GPIOEncoderGateway:
     def __init__(self, pin_a, pin_b):
-        from gpiozero import RotaryEncoder
+        
+        try:
+            from gpiozero import RotaryEncoder
+        except ImportError as e:
+             print(f"Failed to import gpiozero: {e}")
+             return
         self.encoder = RotaryEncoder(pin_a, pin_b)
         # 这里初始化硬件中断 (以伪代码为例)
         # GPIO.add_event_detect(pin_a, GPIO.BOTH, callback=self._update)
         self.logger = logging.getLogger(__name__)
 
-    async def exchange(self, request=None):
+    async def exchange(self, payload=None):
         """
         为了兼容框架，我们也叫 exchange。
         但它不发请求，而是直接返回内存里最新的计数。

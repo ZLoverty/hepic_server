@@ -20,11 +20,11 @@ class PiServer:
         self.logger = self._setup_logging()
         # test mode is now controlled by CLI flag (-t/--test), not config file.
         self.test_mode = bool(test_mode)
-        self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
-        self.pin_a = self.config.get("pin_a")
-        self.pin_b = self.config.get("pin_b")
-        self.logger.info(f"DEBUG: Loaded Pin A: {self.pin_a}, Type: {type(self.pin_a)}")
-        self.logger.info(f"DEBUG: Loaded Pin B: {self.pin_b}, Type: {type(self.pin_b)}")
+        # self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
+        # self.pin_a = self.config.get("pin_a")
+        # self.pin_b = self.config.get("pin_b")
+        # self.logger.info(f"DEBUG: Loaded Pin A: {self.pin_a}, Type: {type(self.pin_a)}")
+        # self.logger.info(f"DEBUG: Loaded Pin B: {self.pin_b}, Type: {type(self.pin_b)}")
         self.is_running = False
         self.server = None
         self.client_tasks = set()
