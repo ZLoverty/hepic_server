@@ -12,6 +12,7 @@ authors = [
   {name = "Zhengyang Liu", email = "liuzy19911112@gmail.com"}
 ]
 dependencies = [
+  "PyYAML>=6.0",
 ]
 
 # --- 关键功能：定义命令行入口 ---
