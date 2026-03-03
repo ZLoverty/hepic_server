@@ -27,6 +27,7 @@ class PiServer:
         self._sensors_initialized = False
         self.test_sensor_ids: list[str] = []
         self.sensor_name_by_id: dict[str, str] = {}
+        self._is_shutting_down = False
 
         self.sensor_name_by_id = self._load_sensor_name_map()
 
@@ -265,16 +266,24 @@ class PiServer:
                 self.client_tasks.discard(current_task)
 
     async def _shutdown(self, sig: signal.Signals):
-        self.logger.info(f"Received signal: {sig.name}. Shutting down.")
+        if self._is_shutting_down:
+            return
+        self._is_shutting_down = True
+
+        sig_name = sig.name if sig else "UNKNOWN"
+        self.logger.info(f"Received signal: {sig_name}. Shutting down.")
         if self.server:
             self.server.close()
+            try:
+                await self.server.wait_closed()
+            except Exception:
+                pass
         if self.client_tasks:
             self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks.")
             for task in list(self.client_tasks):
                 task.cancel()
             await asyncio.gather(*self.client_tasks, return_exceptions=True)
         self.logger.info("Shutdown complete.")
-        asyncio.get_running_loop().stop()
 
     async def run(self):
         loop = asyncio.get_running_loop()
@@ -301,8 +310,7 @@ class PiServer:
         except Exception as e:
             self.logger.error(f"Server exception: {e}", exc_info=True)
         finally:
-            if self.server:
-                self.server.close()
+            await self._shutdown(None)
 
 
 def main():
