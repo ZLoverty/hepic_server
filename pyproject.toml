@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
   "PyYAML>=6.0",
+  "pymodbus>=3.0.0",
 ]
 
 # --- 关键功能：定义命令行入口 ---
