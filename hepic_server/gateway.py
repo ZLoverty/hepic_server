@@ -37,6 +37,7 @@ class TCPGateway(BaseGateway):
         if not await self._ensure_connected():
             return None
         try:
+            command_hex = b"SI\r\n"
             self.writer.write(command_hex)
             await self.writer.drain()
             return await asyncio.wait_for(self.reader.read(1024), timeout=self.timeout)
