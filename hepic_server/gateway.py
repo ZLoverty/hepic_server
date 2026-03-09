@@ -33,11 +33,15 @@ class TCPGateway(BaseGateway):
             logger.error(f"TCP connection failed {self.address}: {e}")
             return False
 
-    async def exchange(self, command: str) -> bytes | None:
+    async def exchange(self, command: bytes | str) -> bytes | None:
         if not await self._ensure_connected():
             return None
         try:
-            self.writer.write(command.encode("ascii"))
+            if isinstance(command, bytes):
+                payload = command
+            else:
+                payload = command.encode("ascii")
+            self.writer.write(payload)
             await self.writer.drain()
             return await asyncio.wait_for(self.reader.read(1024), timeout=self.timeout)
         except Exception as e:

@@ -56,6 +56,13 @@ class PiServer:
             raise ValueError(f"Invalid log_level in config: {level_name}")
         formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
+        root_logger = logging.getLogger()
+        root_logger.setLevel(level)
+        root_logger.handlers.clear()
+        root_stream_handler = logging.StreamHandler()
+        root_stream_handler.setFormatter(formatter)
+        root_logger.addHandler(root_stream_handler)
+
         logger = logging.getLogger("TCPServer")
         logger.setLevel(level)
         logger.handlers.clear()
@@ -153,7 +160,7 @@ class PiServer:
         payload: dict[str, float] = {}
         for sensor_id, result in zip(sensor_ids, results):
             if isinstance(result, Exception):
-                self.logger.debug(f"Sensor {sensor_id} read failed: {result}")
+                self.logger.warning(f"Sensor {sensor_id} read failed: {result}")
                 continue
             if result is None:
                 continue

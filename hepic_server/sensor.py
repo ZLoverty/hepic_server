@@ -22,14 +22,18 @@ class SensorBase(ABC):
 class MettlerSensor(SensorBase):
     def __init__(self, gateway: "BaseGateway", params: dict[str, Any]):
         self.gateway = gateway
-        self.command = "SI\r\n"
+        command_hex = params.get("command_hex")
+        if command_hex:
+            self.command = bytes.fromhex(str(command_hex))
+        else:
+            self.command = b"SI\r\n"
         self.weight_position = params.get("weight_position", 2)
         self.logger = logging.getLogger(__name__)
 
     async def get_value(self) -> float | None:
-        self.logger.debug(f"Sending command to Mettler sensor: {self.command.hex()} ")
+        self.logger.debug(f"Sending command to Mettler sensor: {self.command.hex()}")
         raw_data = await self.gateway.exchange(self.command)
-        
+
         if raw_data is None:
             self.logger.warning("No response received from Mettler sensor")
             return None
@@ -38,7 +42,7 @@ class MettlerSensor(SensorBase):
         else:
             response_str = str(raw_data)
         self.logger.debug(f"Received response from Mettler sensor: {raw_data!r}")
-        
+
         return self.parse_six1_response(response_str)
 
     def parse_six1_response(self, response_str: str) -> float | None:
@@ -47,7 +51,7 @@ class MettlerSensor(SensorBase):
             self.logger.debug(f"Unexpected Mettler response: {response_str!r}")
             return None
         try:
-            return float(parts[self.weight_position] * 9.81)
+            return float(parts[self.weight_position]) * 9.81
         except (IndexError, ValueError) as e:
             self.logger.error(f"Failed to parse Mettler response: {e}; raw={response_str!r}")
             return None

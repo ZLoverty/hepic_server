@@ -25,7 +25,7 @@ sensors:
     protocol: "mettler"     # 指定通讯协议
     params:
       command_hex: "53490D0A"                # Modbus 从机地址
-      weight_position: 3  # 从返回数据中解析重量的位置信息
+      weight_position: 2  # 从返回数据中解析重量的位置信息
 
   - name: "meter_count_mm"
     id: "rotary_encoder_01"
