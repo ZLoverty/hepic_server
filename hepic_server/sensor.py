@@ -27,13 +27,18 @@ class MettlerSensor(SensorBase):
         self.logger = logging.getLogger(__name__)
 
     async def get_value(self) -> float | None:
+        self.logger.debug(f"Sending command to Mettler sensor: {self.command.hex()} ")
         raw_data = await self.gateway.exchange(self.command)
+        
         if raw_data is None:
+            self.logger.warning("No response received from Mettler sensor")
             return None
         if isinstance(raw_data, bytes):
             response_str = raw_data.decode("ascii", errors="ignore")
         else:
             response_str = str(raw_data)
+        self.logger.debug(f"Received response from Mettler sensor: {raw_data!r}")
+        
         return self.parse_six1_response(response_str)
 
     def parse_six1_response(self, response_str: str) -> float | None:
