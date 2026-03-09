@@ -33,7 +33,7 @@ sensors:
     protocol: "rotary_encoder"
     params:
       pulses_per_revolution: 1000
-      diameter_mm: 28.4
+      diameter_mm: 30
 
   - name: "extrusion_force_2_N"
     id: "loadcell_02"
