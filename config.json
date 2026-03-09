@@ -2,5 +2,6 @@
     "host": "0.0.0.0",
     "port": 10001,
     "send_delay": 0.01,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "sensors_config_path": "sensors_config.yaml"
 }
