@@ -71,9 +71,9 @@ class PiServer:
         return sensors
 
     def _resolve_sensors_config_path(self) -> Path:
-        configured = self.config.get("sensors_config")
+        configured = self.config.get("sensors_config_path")
         if not configured:
-            raise KeyError("Missing required config key: 'sensors_config'")
+            raise KeyError("Missing required config key: 'sensors_config_path'")
 
         configured_path = Path(configured).expanduser()
         if not configured_path.is_absolute():
