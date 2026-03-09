@@ -92,7 +92,7 @@ class GPIOEncoderGateway(BaseGateway):
         except ImportError as e:
             self.logger.error(f"Failed to import gpiozero: {e}")
             return
-        self.encoder = RotaryEncoder(pin_a, pin_b)
+        self.encoder = RotaryEncoder(pin_a, pin_b, max_steps=0)  # max_steps=0 for unlimited counting
 
     async def exchange(self, payload: Any = None):
         if self.encoder is None:
