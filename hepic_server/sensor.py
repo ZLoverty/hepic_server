@@ -22,7 +22,7 @@ class SensorBase(ABC):
 class MettlerSensor(SensorBase):
     def __init__(self, gateway: "BaseGateway", params: dict[str, Any]):
         self.gateway = gateway
-        self.command = bytes.fromhex(params["command_hex"])
+        self.command = "SI\r\n"
         self.weight_position = params.get("weight_position", 2)
         self.logger = logging.getLogger(__name__)
 
