@@ -10,7 +10,7 @@ gateways:
   - id: "network_gateway"
     type: "tcp"
     ip: "192.168.0.8"
-    port: 26
+    port: 1026
 
   - id: "rpi_gpio"
     type: "rotary_encoder"
