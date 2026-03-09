@@ -1,266 +1,352 @@
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent))
+import argparse
 import asyncio
 import json
-import random
 import logging
+import random
 import signal
-import argparse
+import sys
+from pathlib import Path
 
-import threading
+sys.path.append(str(Path(__file__).resolve().parent))
+
+try:
+    from .sensor import load_sensors_from_yaml
+except ImportError:
+    from sensor import load_sensors_from_yaml
+
 
 class PiServer:
-    """
-    一个健壮的、可作为服务运行的异步TCP服务器。
-    它从配置文件加载设置，使用专业的日志系统，并能优雅地处理关闭信号。
-    """
-    def __init__(self, config_path, test_mode=False):
-        self.config = self._load_config(config_path)
+    def __init__(self, config_path: str, test_mode: bool = False):
+        self.config_file_path = Path(config_path).expanduser().resolve()
+        self.config = self._load_config()
         self.logger = self._setup_logging()
-        # test mode is now controlled by CLI flag (-t/--test), not config file.
         self.test_mode = bool(test_mode)
-        self.mettler_ip = self.config.get("mettler_ip") # loadcell IP
-        self.pin_a = self.config.get("pin_a")
-        self.pin_b = self.config.get("pin_b")
-        self.logger.info(f"DEBUG: Loaded Pin A: {self.pin_a}, Type: {type(self.pin_a)}")
-        self.logger.info(f"DEBUG: Loaded Pin B: {self.pin_b}, Type: {type(self.pin_b)}")
-        self.is_running = False
         self.server = None
-        self.client_tasks = set()
-        # self.METER_COUNT_WORKER_AVAILABLE = False
-        self.meter_count_worker = None
+        self.client_tasks: set[asyncio.Task] = set()
+        self.sensors = {}
+        self._sensors_initialized = False
+        self.test_sensor_ids: list[str] = []
+        self.sensor_name_by_id: dict[str, str] = {}
+        self._is_shutting_down = False
+        self.sensor_config_data = self._load_sensor_config_data()
 
-        # initiate workers that communicates with sensors and PC
-        if not self.test_mode:
-            from mettler_worker import MettlerWorker
-            from meter_count_worker import MeterCountWorker
-            self.mettler_worker = MettlerWorker(self.mettler_ip, logger=self.logger)
-            self.meter_count_worker = MeterCountWorker(self.pin_a, self.pin_b, print=True)
-            self.thread = threading.Thread(target=self.meter_count_worker.run)
-            self.thread.daemon = True # 设为守护线程
+        self.sensor_name_by_id = self._load_sensor_name_map()
 
-    def _load_config(self, path):
-        """加载 JSON 配置文件"""
-        config_file = Path(path).expanduser()
+        if self.test_mode:
+            self.test_sensor_ids = self._load_test_sensor_ids()
+
+    def _load_config(self) -> dict:
+        config_file = self.config_file_path
         if not config_file.is_file():
-            print(f"错误：配置文件 {path} 未找到！", file=sys.stderr)
-            sys.exit(1)
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            raise FileNotFoundError(f"Config file not found: {config_file}")
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in config file {config_file}: {e}") from e
 
-    def _setup_logging(self):
-        """配置日志系统，同时输出到控制台和可轮换的文件"""
+        if not isinstance(config, dict):
+            raise ValueError(f"Config file must contain a JSON object: {config_file}")
+        return config
+
+    def _setup_logging(self) -> logging.Logger:
+        level_name = str(self.config.get("log_level", "INFO")).upper()
+        level = getattr(logging, level_name, None)
+        if not isinstance(level, int):
+            raise ValueError(f"Invalid log_level in config: {level_name}")
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+        root_logger = logging.getLogger()
+        root_logger.setLevel(level)
+        root_logger.handlers.clear()
+        root_stream_handler = logging.StreamHandler()
+        root_stream_handler.setFormatter(formatter)
+        root_logger.addHandler(root_stream_handler)
+
         logger = logging.getLogger("TCPServer")
-        logger.setLevel(self.config.get("log_level", "INFO").upper())
-        
-        # 格式化
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        
-        # 控制台输出
+        logger.setLevel(level)
+        logger.handlers.clear()
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)
-        
+        logger.propagate = False
         return logger
 
-    async def _handle_client(self, reader, writer):
-        
-        peer_addr = writer.get_extra_info('peername')
+    def _load_sensors(self):
+        config_path = self._resolve_sensors_config_path()
+        sensors = load_sensors_from_yaml(config_path)
+        self.logger.info(f"Loaded {len(sensors)} sensors from {config_path}")
+        return sensors
 
-        self.logger.info(f"accepting new link from {peer_addr}")
+    def _load_sensor_config_data(self) -> dict:
+        try:
+            import yaml
+        except ImportError as e:
+            raise RuntimeError("PyYAML is required to load sensors_config.yaml. Install with: pip install PyYAML") from e
+
+        config_path = self._resolve_sensors_config_path()
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Invalid sensors config format in {config_path}: root must be a mapping")
+        self.logger.info(f"Loaded sensor config from {config_path}")
+        return cfg
+
+    def _resolve_sensors_config_path(self) -> Path:
+        configured = self.config.get("sensors_config_path")
+        if not configured:
+            raise KeyError("Missing required config key: 'sensors_config_path'")
+
+        configured_path = Path(configured).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = (self.config_file_path.parent / configured_path).resolve()
+
+        if not configured_path.is_file():
+            raise FileNotFoundError(f"sensors_config.yaml not found at configured path: {configured_path}")
+
+        return configured_path
+
+    def _load_test_sensor_ids(self) -> list[str]:
+        if self.sensor_name_by_id:
+            sensor_ids = list(self.sensor_name_by_id.keys())
+            self.logger.info(f"Loaded {len(sensor_ids)} test sensor ids from sensors config")
+            return sensor_ids
+        return ["loadcell_01", "rotary_encoder_01"]
+
+    def _load_sensor_name_map(self) -> dict[str, str]:
+        try:
+            mapping: dict[str, str] = {}
+            for item in self.sensor_config_data.get("sensors", []):
+                if not isinstance(item, dict):
+                    continue
+                sensor_id = item.get("id")
+                sensor_name = item.get("name") or sensor_id
+                if sensor_id:
+                    mapping[str(sensor_id)] = str(sensor_name)
+            if mapping:
+                self.logger.info(f"Loaded {len(mapping)} sensor names from sensors config")
+            return mapping
+        except (KeyError, FileNotFoundError):
+            raise
+        except Exception as e:
+            logging.getLogger("TCPServer").warning(f"Failed to load sensor names from sensors config: {e}")
+            return {}
+
+    def _initialize_sensors(self):
+        if self.test_mode or self._sensors_initialized:
+            return
+        try:
+            self.sensors = self._load_sensors()
+        except (KeyError, FileNotFoundError):
+            raise
+        except Exception as e:
+            # Do not block server startup when sensor stack init fails.
+            self.logger.error(f"Sensor initialization failed. Server will start with empty sensor set: {e}", exc_info=True)
+            self.sensors = {}
+        finally:
+            self._sensors_initialized = True
+
+    async def _poll_reachable_sensors(self) -> dict[str, float]:
+        if not self.sensors:
+            return {}
+
+        sensor_ids = list(self.sensors.keys())
+        tasks = [
+            asyncio.wait_for(self.sensors[sensor_id].get_value(), timeout=self.config.get("sensor_timeout", 1.0))
+            for sensor_id in sensor_ids
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        payload: dict[str, float] = {}
+        for sensor_id, result in zip(sensor_ids, results):
+            if isinstance(result, Exception):
+                self.logger.warning(f"Sensor {sensor_id} read failed: {result}")
+                continue
+            if result is None:
+                continue
+            payload[self.sensor_name_by_id.get(sensor_id, sensor_id)] = float(result)
+        return payload
+
+    def _build_message(self, message_type: str, payload: dict) -> bytes:
+        return json.dumps({"message_type": message_type, "payload": payload}, ensure_ascii=False).encode("utf-8") + b"\n"
+
+    def _is_sensor_config_request(self, raw_message: str) -> bool:
+        message = raw_message.strip()
+        if not message:
+            return False
+        if message.upper() in {"GET_SENSOR_CONFIG", "REQUEST_SENSOR_CONFIG"}:
+            return True
+        try:
+            parsed = json.loads(message)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed, dict):
+            return False
+        message_type = str(parsed.get("message_type", "")).lower()
+        action = str(parsed.get("action", "")).lower()
+        return message_type in {"get_sensor_config", "request_sensor_config"} or action == "get_sensor_config"
+
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        peer_addr = writer.get_extra_info("peername")
+        self.logger.info(f"Accepting connection from {peer_addr}")
+        write_lock = asyncio.Lock()
+
+        async def send_message(message_type: str, payload: dict):
+            data_to_send = self._build_message(message_type, payload)
+            async with write_lock:
+                writer.write(data_to_send)
+                await writer.drain()
 
         current_task = asyncio.current_task()
-        self.client_tasks.add(current_task)
+        if current_task:
+            self.client_tasks.add(current_task)
 
         async def send_loop():
-            """周期性地发送数据给客户端"""
             try:
                 while True:
-                    if self.test_mode: 
-                        # generate random data
-                        weight = 2 + random.uniform(-.2, .2)
-                        meter = 2 + random.uniform(-.2, .2)
+                    if self.test_mode:
+                        message = {
+                            self.sensor_name_by_id.get(sensor_id, sensor_id): 2 + random.uniform(-0.2, 0.2)
+                            for sensor_id in self.test_sensor_ids
+                        }
                     else:
-                        # read real data
-                        weight = self.mettler_worker.weight
-                        meter = self.meter_count_worker.meter_count
-         
-                    message = {
-                        "extrusion_force": weight * 9.8,
-                        "meter_count": meter
-                    }
-                    data_to_send = json.dumps(message).encode("utf-8") + b'\n'
-                    self.logger.debug(f"sending to {peer_addr} -> {message}")
-                    writer.write(data_to_send)
-                    await writer.drain()             
-                    await asyncio.sleep(self.config.get("send_delay", 0.01))
+                        message = await self._poll_reachable_sensors()
 
+                    self.logger.debug(f"Sending sensor_data to {peer_addr} -> {message}")
+                    await send_message("sensor_data", message)
+                    await asyncio.sleep(self.config.get("send_delay", 0.01))
             except (ConnectionResetError, BrokenPipeError) as e:
-                self.logger.warning(f"disconnect from {peer_addr}: {e}")
-                raise
-            except KeyboardInterrupt:
-                self.logger.error("\n程序被用户中断。")
+                self.logger.warning(f"Disconnect from {peer_addr}: {e}")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Send loop cancelled.")
                 raise
             except Exception as e:
-                self.logger.error(f"unknow error sending to {peer_addr}: {e}", exc_info=True)
+                self.logger.error(f"Unexpected send error to {peer_addr}: {e}", exc_info=True)
                 raise
 
         async def receive_loop():
-            """从客户端接收数据"""
             try:
                 while True:
-                    data = await reader.read(1024)
+                    data = await reader.readline()
                     if not data:
-                        self.logger.info(f"client {peer_addr} has disconnected")
+                        self.logger.info(f"Client {peer_addr} has disconnected")
                         break
-                    message = data.decode().strip()
-                    self.logger.info(f"received from {peer_addr}: {message!r}")
+                    message = data.decode("utf-8", errors="ignore").strip()
+                    self.logger.info(f"Received from {peer_addr}: {message!r}")
+                    if self._is_sensor_config_request(message):
+                        await send_message("sensor_config", self.sensor_config_data)
+                        self.logger.info(f"Sent sensor_config to {peer_addr}")
             except ConnectionResetError:
-                # 这是关键：捕获错误
-                self.logger.error(f"Client {peer_addr} forcibly closed connection (Connection reset).")
+                self.logger.error(f"Client {peer_addr} forcibly closed connection.")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Receive loop cancelled.")
                 raise
             except Exception as e:
-                self.logger.error(f"error when receiving from {peer_addr}: {e}", exc_info=True)
+                self.logger.error(f"Error receiving from {peer_addr}: {e}", exc_info=True)
                 raise
 
-
+        send_task = None
+        receive_task = None
         try:
             send_task = asyncio.create_task(send_loop())
             receive_task = asyncio.create_task(receive_loop())
-
-            done, pending = await asyncio.wait(
-                [send_task, receive_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-        
+            await asyncio.wait([send_task, receive_task], return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
             self.logger.info(f"Connection handler for {peer_addr} cancelled.")
-        
         except Exception as e:
             self.logger.error(f"Handler exception: {e}")
-
         finally:
             for task in [send_task, receive_task]:
                 if task and not task.done():
                     task.cancel()
-            
-            # wait for tasks to complete
             if send_task or receive_task:
                 await asyncio.gather(send_task, receive_task, return_exceptions=True)
 
-            # close socket
-            self.logger.info("Close socket ...")
             writer.close()
             try:
                 await writer.wait_closed()
-            except:
+            except Exception:
                 pass
 
-            self.client_tasks.discard(current_task)
+            if current_task:
+                self.client_tasks.discard(current_task)
 
-    async def _shutdown(self, sig):
-        """优雅地关闭服务器"""
-        self.logger.info(f"receive close signal: {sig.name}. closing...")
-        
-        # 停止接受新连接
+    async def _shutdown(self, sig: signal.Signals):
+        if self._is_shutting_down:
+            return
+        self._is_shutting_down = True
+
+        sig_name = sig.name if sig else "UNKNOWN"
+        self.logger.info(f"Received signal: {sig_name}. Shutting down.")
         if self.server:
-            self.logger.info("closing server")
             self.server.close()
-            self.logger.info("waiting server to close")
-            # await asyncio.wait_for(self.server.wait_closed(), timeout=2.0)
-
-        # 2. 【新增】取消所有活跃的客户端连接任务
+            try:
+                await self.server.wait_closed()
+            except Exception:
+                pass
         if self.client_tasks:
-            self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks...")
+            self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks.")
             for task in list(self.client_tasks):
                 task.cancel()
-            # 等待它们响应取消并清理
             await asyncio.gather(*self.client_tasks, return_exceptions=True)
-
-        # 2. 主动停止所有 worker
-        self.logger.info("Stopping internal workers...")
-        if hasattr(self, 'mettler_task'): # 检查任务是否存在
-            self.logger.info("Mettler task stopped.")
-            # self.meter_count_worker.stop() # 将来也停止它
-            
-            # 等待 worker 任务完成
-            try:
-                await asyncio.wait_for(self.mettler_task, timeout=2.0)
-            except asyncio.TimeoutError:
-                self.logger.warning("Mettler worker did not stop in time, cancelling.")
-                self.mettler_task.cancel()
-            except Exception as e:
-                self.logger.error(f"Error during worker shutdown: {e}")
-
         self.logger.info("Shutdown complete.")
-        asyncio.get_running_loop().stop()
 
     async def run(self):
-        """启动服务器并监听信号"""
-
-        if self.meter_count_worker:
-            self.thread.start()
-        
         loop = asyncio.get_running_loop()
-        # 为 SIGINT (Ctrl+C) 和 SIGTERM (来自 systemd) 添加信号处理器
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
+            try:
+                loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
+            except NotImplementedError:
+                # Windows ProactorEventLoop does not support add_signal_handler.
+                self.logger.debug("Signal handlers are not supported on this platform/event loop.")
+                break
 
-        if not self.test_mode:
-            self.mettler_task = asyncio.create_task(self.mettler_worker.run())
+        self._initialize_sensors()
 
         host = self.config.get("host", "0.0.0.0")
         port = self.config.get("port", 10001)
 
         try:
             self.server = await asyncio.start_server(self._handle_client, host, port)
-            addrs = ', '.join(str(sock.getsockname()) for sock in self.server.sockets)
-            self.logger.info(f"server start listening {addrs}")
+            addrs = ", ".join(str(sock.getsockname()) for sock in self.server.sockets)
+            self.logger.info(f"Server listening on {addrs}")
             await self.server.serve_forever()
         except asyncio.CancelledError:
             pass
-
         except Exception as e:
-            self.logger.error(f"Server exception: {e}")
+            self.logger.error(f"Server exception: {e}", exc_info=True)
         finally:
-            # 确保最后 server 也是关闭的
-            if self.server:
-                self.server.close()
+            await self._shutdown(None)
+
 
 def main():
-    from importlib.metadata import version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError, version
+
     package_name = "hepic_server"
     try:
-        # 只有当包被 pip install (包括 pip install -e .) 后才能读到
-        __version__ = version(package_name)
+        app_version = version(package_name)
     except PackageNotFoundError:
-        # 如果是直接 python server.py 运行且未安装，给个默认值
-        __version__ = "dev-local"
+        app_version = "dev-local"
 
     parser = argparse.ArgumentParser(description="Pi data server TCP")
-    parser.add_argument("config_file", type=str, help="path to the config json file.")
+    parser.add_argument("config_file", type=str, help="Path to config json file.")
     parser.add_argument(
         "-t",
         "--test",
         action="store_true",
-        help="enable test mode: generate random values instead of reading sensors",
+        help="Enable test mode: generate random sensor values.",
     )
-    parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {__version__}")
+    parser.add_argument("-v", "--version", action="version", version=f"hepic_server version {app_version}")
     args = parser.parse_args()
-    
-    server_app = PiServer(args.config_file, test_mode=args.test)
 
+    server_app = PiServer(args.config_file, test_mode=args.test)
     try:
         asyncio.run(server_app.run())
     except (KeyboardInterrupt, SystemExit):
-        server_app.logger.info("program closed")
+        server_app.logger.info("Program closed")
+
 
 if __name__ == "__main__":
     main()
