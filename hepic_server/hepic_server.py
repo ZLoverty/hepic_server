@@ -28,6 +28,7 @@ class PiServer:
         self.test_sensor_ids: list[str] = []
         self.sensor_name_by_id: dict[str, str] = {}
         self._is_shutting_down = False
+        self.sensor_config_data = self._load_sensor_config_data()
 
         self.sensor_name_by_id = self._load_sensor_name_map()
 
@@ -70,6 +71,20 @@ class PiServer:
         self.logger.info(f"Loaded {len(sensors)} sensors from {config_path}")
         return sensors
 
+    def _load_sensor_config_data(self) -> dict:
+        try:
+            import yaml
+        except ImportError as e:
+            raise RuntimeError("PyYAML is required to load sensors_config.yaml. Install with: pip install PyYAML") from e
+
+        config_path = self._resolve_sensors_config_path()
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Invalid sensors config format in {config_path}: root must be a mapping")
+        self.logger.info(f"Loaded sensor config from {config_path}")
+        return cfg
+
     def _resolve_sensors_config_path(self) -> Path:
         configured = self.config.get("sensors_config_path")
         if not configured:
@@ -93,13 +108,8 @@ class PiServer:
 
     def _load_sensor_name_map(self) -> dict[str, str]:
         try:
-            import yaml
-
-            config_path = self._resolve_sensors_config_path()
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
             mapping: dict[str, str] = {}
-            for item in cfg.get("sensors", []):
+            for item in self.sensor_config_data.get("sensors", []):
                 if not isinstance(item, dict):
                     continue
                 sensor_id = item.get("id")
@@ -107,7 +117,7 @@ class PiServer:
                 if sensor_id:
                     mapping[str(sensor_id)] = str(sensor_name)
             if mapping:
-                self.logger.info(f"Loaded {len(mapping)} sensor names from {config_path}")
+                self.logger.info(f"Loaded {len(mapping)} sensor names from sensors config")
             return mapping
         except (KeyError, FileNotFoundError):
             raise
@@ -150,9 +160,35 @@ class PiServer:
             payload[self.sensor_name_by_id.get(sensor_id, sensor_id)] = float(result)
         return payload
 
+    def _build_message(self, message_type: str, payload: dict) -> bytes:
+        return json.dumps({"message_type": message_type, "payload": payload}, ensure_ascii=False).encode("utf-8") + b"\n"
+
+    def _is_sensor_config_request(self, raw_message: str) -> bool:
+        message = raw_message.strip()
+        if not message:
+            return False
+        if message.upper() in {"GET_SENSOR_CONFIG", "REQUEST_SENSOR_CONFIG"}:
+            return True
+        try:
+            parsed = json.loads(message)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed, dict):
+            return False
+        message_type = str(parsed.get("message_type", "")).lower()
+        action = str(parsed.get("action", "")).lower()
+        return message_type in {"get_sensor_config", "request_sensor_config"} or action == "get_sensor_config"
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer_addr = writer.get_extra_info("peername")
         self.logger.info(f"Accepting connection from {peer_addr}")
+        write_lock = asyncio.Lock()
+
+        async def send_message(message_type: str, payload: dict):
+            data_to_send = self._build_message(message_type, payload)
+            async with write_lock:
+                writer.write(data_to_send)
+                await writer.drain()
 
         current_task = asyncio.current_task()
         if current_task:
@@ -169,10 +205,8 @@ class PiServer:
                     else:
                         message = await self._poll_reachable_sensors()
 
-                    data_to_send = json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n"
-                    self.logger.debug(f"Sending to {peer_addr} -> {message}")
-                    writer.write(data_to_send)
-                    await writer.drain()
+                    self.logger.debug(f"Sending sensor_data to {peer_addr} -> {message}")
+                    await send_message("sensor_data", message)
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
             except (ConnectionResetError, BrokenPipeError) as e:
                 self.logger.warning(f"Disconnect from {peer_addr}: {e}")
@@ -187,12 +221,15 @@ class PiServer:
         async def receive_loop():
             try:
                 while True:
-                    data = await reader.read(1024)
+                    data = await reader.readline()
                     if not data:
                         self.logger.info(f"Client {peer_addr} has disconnected")
                         break
                     message = data.decode("utf-8", errors="ignore").strip()
                     self.logger.info(f"Received from {peer_addr}: {message!r}")
+                    if self._is_sensor_config_request(message):
+                        await send_message("sensor_config", self.sensor_config_data)
+                        self.logger.info(f"Sent sensor_config to {peer_addr}")
             except ConnectionResetError:
                 self.logger.error(f"Client {peer_addr} forcibly closed connection.")
                 raise
