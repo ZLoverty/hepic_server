@@ -146,7 +146,7 @@ class PiServer:
         finally:
             self._sensors_initialized = True
 
-    async def _poll_reachable_sensors(self) -> dict[str, float]:
+    async def _poll_reachable_sensors(self) -> dict[str, float | None]:
         if not self.sensors:
             return {}
 
@@ -157,14 +157,17 @@ class PiServer:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        payload: dict[str, float] = {}
+        payload: dict[str, float | None] = {}
         for sensor_id, result in zip(sensor_ids, results):
-            if isinstance(result, Exception):
+            sensor_name = self.sensor_name_by_id.get(sensor_id, sensor_id)
+            if isinstance(result, BaseException):
                 self.logger.warning(f"Sensor {sensor_id} read failed: {result}")
-                continue
-            if result is None:
-                continue
-            payload[self.sensor_name_by_id.get(sensor_id, sensor_id)] = float(result)
+                payload[sensor_name] = None
+            elif result is None:
+                self.logger.warning(f"Sensor {sensor_id} returned no data")
+                payload[sensor_name] = None
+            else:
+                payload[sensor_name] = float(result)
         return payload
 
     def _build_message(self, message_type: str, payload: dict) -> bytes:
