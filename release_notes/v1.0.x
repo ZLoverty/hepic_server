@@ -9,3 +9,10 @@
 - now send sensors_config.yaml to HEPiC upon request
 - Fixed several sensor communication misconfigs
 - add gpiozero, lgpio, RPi.GPIO to dependencies
+
+## v1.0.2
+
+- add zeroable and label to sensor config template
+- use tsinghua mirror for all dependencies
+- fix loadcell silent disconnection
+- add unit test for sensor reconnection
