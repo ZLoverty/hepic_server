@@ -240,8 +240,8 @@ class PiServer:
                     if self._is_sensor_config_request(message):
                         await send_message("sensor_config", self.sensor_config_data)
                         self.logger.info(f"Sent sensor_config to {peer_addr}")
-            except ConnectionResetError:
-                self.logger.warning(f"Client {peer_addr} forcibly closed connection.")
+            except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
+                self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Receive loop cancelled.")
