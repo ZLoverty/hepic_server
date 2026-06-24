@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import signal
+import socket
 import sys
 from pathlib import Path
 
@@ -192,6 +193,19 @@ class PiServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer_addr = writer.get_extra_info("peername")
         self.logger.info(f"Accepting connection from {peer_addr}")
+
+        # Detect silent disconnects (IP change, cable unplug, crash) without waiting
+        # for Linux's default ~15-minute TCP retransmit timeout. TCP_USER_TIMEOUT tells
+        # the kernel to close the connection if sent data goes unacknowledged for this long.
+        sock = writer.get_extra_info("socket")
+        _tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+        if sock and _tcp_user_timeout is not None:
+            try:
+                timeout_ms = int(self.config.get("tcp_user_timeout_ms", 5_000))
+                sock.setsockopt(socket.IPPROTO_TCP, _tcp_user_timeout, timeout_ms)
+            except OSError:
+                pass
+
         write_lock = asyncio.Lock()
 
         async def send_message(message_type: str, payload: dict):
