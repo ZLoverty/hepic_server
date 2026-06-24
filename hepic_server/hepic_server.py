@@ -283,7 +283,10 @@ class PiServer:
 
             writer.close()
             try:
-                await writer.wait_closed()
+                await asyncio.wait_for(
+                    writer.wait_closed(),
+                    timeout=self.config.get("drain_timeout", 5.0),
+                )
             except Exception:
                 pass
 
@@ -297,17 +300,24 @@ class PiServer:
 
         sig_name = sig.name if sig else "UNKNOWN"
         self.logger.info(f"Received signal: {sig_name}. Shutting down.")
+
+        # Stop accepting new connections first.
         if self.server:
             self.server.close()
-            try:
-                await self.server.wait_closed()
-            except Exception:
-                pass
+
+        # Cancel client handlers before server.wait_closed(): wait_closed() blocks
+        # until all _handle_client coroutines return, so tasks must be cancelled first.
         if self.client_tasks:
             self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks.")
             for task in list(self.client_tasks):
                 task.cancel()
             await asyncio.gather(*self.client_tasks, return_exceptions=True)
+
+        if self.server:
+            try:
+                await self.server.wait_closed()
+            except Exception:
+                pass
         self.logger.info("Shutdown complete.")
 
     async def run(self):
