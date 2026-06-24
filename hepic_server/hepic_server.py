@@ -198,7 +198,7 @@ class PiServer:
             data_to_send = self._build_message(message_type, payload)
             async with write_lock:
                 writer.write(data_to_send)
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=self.config.get("drain_timeout", 5.0))
 
         current_task = asyncio.current_task()
         if current_task:
@@ -218,8 +218,8 @@ class PiServer:
                     self.logger.debug(f"Sending sensor_data to {peer_addr} -> {message}")
                     await send_message("sensor_data", message)
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
-            except (ConnectionResetError, BrokenPipeError) as e:
-                self.logger.warning(f"Disconnect from {peer_addr}: {e}")
+            except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
+                self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Send loop cancelled.")
@@ -241,7 +241,7 @@ class PiServer:
                         await send_message("sensor_config", self.sensor_config_data)
                         self.logger.info(f"Sent sensor_config to {peer_addr}")
             except ConnectionResetError:
-                self.logger.error(f"Client {peer_addr} forcibly closed connection.")
+                self.logger.warning(f"Client {peer_addr} forcibly closed connection.")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Receive loop cancelled.")

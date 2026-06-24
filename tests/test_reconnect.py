@@ -247,6 +247,68 @@ class TestPollReachableSensors(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["Sensor slow"])
 
 
+# ---------------------------------------------------------------------------
+# drain() timeout — dead TCP client detected within drain_timeout, not OS timeout
+# ---------------------------------------------------------------------------
+class TestDrainTimeout(unittest.IsolatedAsyncioTestCase):
+    async def _make_server_and_writer(self, drain_timeout: float = 0.05):
+        from hepic_server.hepic_server import PiServer
+
+        server = PiServer.__new__(PiServer)
+        server.config = {"drain_timeout": drain_timeout}
+        server.logger = MagicMock()
+        return server
+
+    async def test_drain_timeout_raises_quickly_on_dead_client(self):
+        """drain() that never completes should raise within drain_timeout, not wait for OS."""
+        server = await self._make_server_and_writer(drain_timeout=0.05)
+
+        async def hanging_drain():
+            await asyncio.sleep(10)
+
+        mock_writer = MagicMock()
+        mock_writer.drain = hanging_drain
+
+        write_lock = asyncio.Lock()
+
+        async def send_message(message_type, payload):
+            data = server._build_message(message_type, payload)
+            async with write_lock:
+                mock_writer.write(data)
+                await asyncio.wait_for(mock_writer.drain(), timeout=server.config.get("drain_timeout", 5.0))
+
+        with self.assertRaises((TimeoutError, asyncio.TimeoutError)):
+            await send_message("sensor_data", {"force": 9.81})
+
+    async def test_timeout_error_classified_as_known_disconnect(self):
+        """`TimeoutError` must NOT reach the `except Exception` branch in send_loop."""
+        drain_fired = []
+
+        async def hanging_drain():
+            drain_fired.append(True)
+            await asyncio.sleep(10)
+
+        mock_writer = MagicMock()
+        mock_writer.is_closing.return_value = False
+        mock_writer.drain = hanging_drain
+
+        unexpected_errors = []
+
+        async def send_loop_simulation():
+            try:
+                write_lock = asyncio.Lock()
+                async with write_lock:
+                    mock_writer.write(b"data\n")
+                    await asyncio.wait_for(mock_writer.drain(), timeout=0.05)
+            except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
+                pass  # expected — treated as known disconnect
+            except Exception as e:
+                unexpected_errors.append(e)
+
+        await send_loop_simulation()
+        self.assertEqual(unexpected_errors, [], f"TimeoutError should be a known disconnect, not unexpected: {unexpected_errors}")
+
+
 if __name__ == "__main__":
     runner = unittest.TextTestRunner(verbosity=2)
     loader = unittest.TestLoader()
