@@ -22,9 +22,16 @@ class TCPGateway(BaseGateway):
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
 
+    def _close(self) -> None:
+        if self.writer:
+            self.writer.close()
+        self.writer = None
+        self.reader = None
+
     async def _ensure_connected(self) -> bool:
-        if self.writer and not self.writer.is_closing():
+        if self.writer and not self.writer.is_closing() and self.reader and not self.reader.at_eof():
             return True
+        self._close()
         try:
             self.reader, self.writer = await asyncio.open_connection(*self.address)
             logger.info(f"Connected to TCP gateway: {self.address}")
@@ -46,24 +53,31 @@ class TCPGateway(BaseGateway):
             return await asyncio.wait_for(self.reader.read(1024), timeout=self.timeout)
         except Exception as e:
             logger.error(f"TCP communication error: {e}")
-            self.writer = None
+            self._close()
             return None
 
 
 class ModbusGateway(BaseGateway):
+    _CONSECUTIVE_FAIL_THRESHOLD = 3
+
     def __init__(self, port: str, baudrate: int = 9600):
         self.client = AsyncModbusSerialClient(
             port=port,
             baudrate=baudrate,
+            retries=0,
             timeout=1,
         )
         self._lock = asyncio.Lock()
+        self._consecutive_failures = 0
 
     async def _ensure_connected(self) -> bool:
         if self.client.connected:
             return True
         try:
-            return await self.client.connect()
+            connected = await self.client.connect()
+            if connected:
+                logger.info(f"Reconnected to serial port {self.client.comm_params.port}")
+            return connected
         except Exception as e:
             logger.error(f"Unable to connect serial port {self.client.comm_params.port}: {e}")
             return False
@@ -77,13 +91,20 @@ class ModbusGateway(BaseGateway):
                 if response.isError():
                     logger.error(f"Modbus business error: {response}")
                     return None
+                self._consecutive_failures = 0
                 return response
             except ModbusException as e:
-                logger.error(f"Modbus protocol error: {e}")
+                self._consecutive_failures += 1
+                logger.error(f"Modbus error ({self._consecutive_failures}/{self._CONSECUTIVE_FAIL_THRESHOLD}): {e}")
+                if self._consecutive_failures >= self._CONSECUTIVE_FAIL_THRESHOLD:
+                    logger.warning(f"Too many consecutive failures, closing connection for reconnect")
+                    self.client.close()
+                    self._consecutive_failures = 0
                 return None
             except Exception as e:
                 logger.error(f"Transport layer communication error: {e}")
                 self.client.close()
+                self._consecutive_failures = 0
                 return None
 
 

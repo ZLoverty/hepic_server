@@ -20,25 +20,31 @@ gateways:
 # 2. 定义具体的传感器列表（解决“有哪些”的问题）
 sensors:
   - name: "extrusion_force_N"
+    label: "挤出力(N)"
     id: "loadcell_01"
     gateway_id: "network_gateway"  # 引用上面定义的接口
     protocol: "mettler"     # 指定通讯协议
+    zeroable: true
     params:
       command_hex: "53490D0A"                # Modbus 从机地址
       weight_position: 2  # 从返回数据中解析重量的位置信息
 
   - name: "meter_count_mm"
+    label: "计量计数(mm)"
     id: "rotary_encoder_01"
     gateway_id: "rpi_gpio"
     protocol: "rotary_encoder"
+    zeroable: true
     params:
       pulses_per_revolution: 1000
       diameter_mm: 30
 
   - name: "extrusion_force_2_N"
     id: "loadcell_02"
+    label: "挤出力2(N)"
     gateway_id: "rs485_bus_1"
     protocol: "modbus"
+    zeroable: true
     params:
       address: 0
       count: 2

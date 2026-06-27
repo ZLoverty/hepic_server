@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hepic_server"
-version = "1.0.1"  # <--- 在这里管理版本
+dynamic = ["version"]
 description = "A robust async TCP server for HEPiC system. It runs on Raspberry Pi and communicates with Mettler load cell and meter counter."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,6 +24,9 @@ dependencies = [
 [project.scripts]
 # 格式：命令名 = "包名.模块名:函数名"
 hepic_server = "hepic_server.hepic_server:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "hepic_server.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]  # 代码在当前目录

@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import signal
+import socket
 import sys
 from pathlib import Path
 
@@ -146,7 +147,7 @@ class PiServer:
         finally:
             self._sensors_initialized = True
 
-    async def _poll_reachable_sensors(self) -> dict[str, float]:
+    async def _poll_reachable_sensors(self) -> dict[str, float | None]:
         if not self.sensors:
             return {}
 
@@ -157,14 +158,17 @@ class PiServer:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        payload: dict[str, float] = {}
+        payload: dict[str, float | None] = {}
         for sensor_id, result in zip(sensor_ids, results):
-            if isinstance(result, Exception):
+            sensor_name = self.sensor_name_by_id.get(sensor_id, sensor_id)
+            if isinstance(result, BaseException):
                 self.logger.warning(f"Sensor {sensor_id} read failed: {result}")
-                continue
-            if result is None:
-                continue
-            payload[self.sensor_name_by_id.get(sensor_id, sensor_id)] = float(result)
+                payload[sensor_name] = None
+            elif result is None:
+                self.logger.warning(f"Sensor {sensor_id} returned no data")
+                payload[sensor_name] = None
+            else:
+                payload[sensor_name] = float(result)
         return payload
 
     def _build_message(self, message_type: str, payload: dict) -> bytes:
@@ -189,13 +193,26 @@ class PiServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer_addr = writer.get_extra_info("peername")
         self.logger.info(f"Accepting connection from {peer_addr}")
+
+        # Detect silent disconnects (IP change, cable unplug, crash) without waiting
+        # for Linux's default ~15-minute TCP retransmit timeout. TCP_USER_TIMEOUT tells
+        # the kernel to close the connection if sent data goes unacknowledged for this long.
+        sock = writer.get_extra_info("socket")
+        _tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+        if sock and _tcp_user_timeout is not None:
+            try:
+                timeout_ms = int(self.config.get("tcp_user_timeout_ms", 5_000))
+                sock.setsockopt(socket.IPPROTO_TCP, _tcp_user_timeout, timeout_ms)
+            except OSError:
+                pass
+
         write_lock = asyncio.Lock()
 
         async def send_message(message_type: str, payload: dict):
             data_to_send = self._build_message(message_type, payload)
             async with write_lock:
                 writer.write(data_to_send)
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=self.config.get("drain_timeout", 5.0))
 
         current_task = asyncio.current_task()
         if current_task:
@@ -215,8 +232,8 @@ class PiServer:
                     self.logger.debug(f"Sending sensor_data to {peer_addr} -> {message}")
                     await send_message("sensor_data", message)
                     await asyncio.sleep(self.config.get("send_delay", 0.01))
-            except (ConnectionResetError, BrokenPipeError) as e:
-                self.logger.warning(f"Disconnect from {peer_addr}: {e}")
+            except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
+                self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Send loop cancelled.")
@@ -237,8 +254,8 @@ class PiServer:
                     if self._is_sensor_config_request(message):
                         await send_message("sensor_config", self.sensor_config_data)
                         self.logger.info(f"Sent sensor_config to {peer_addr}")
-            except ConnectionResetError:
-                self.logger.error(f"Client {peer_addr} forcibly closed connection.")
+            except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
+                self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise
             except asyncio.CancelledError:
                 self.logger.info("Receive loop cancelled.")
@@ -266,7 +283,10 @@ class PiServer:
 
             writer.close()
             try:
-                await writer.wait_closed()
+                await asyncio.wait_for(
+                    writer.wait_closed(),
+                    timeout=self.config.get("drain_timeout", 5.0),
+                )
             except Exception:
                 pass
 
@@ -280,17 +300,24 @@ class PiServer:
 
         sig_name = sig.name if sig else "UNKNOWN"
         self.logger.info(f"Received signal: {sig_name}. Shutting down.")
+
+        # Stop accepting new connections first.
         if self.server:
             self.server.close()
-            try:
-                await self.server.wait_closed()
-            except Exception:
-                pass
+
+        # Cancel client handlers before server.wait_closed(): wait_closed() blocks
+        # until all _handle_client coroutines return, so tasks must be cancelled first.
         if self.client_tasks:
             self.logger.info(f"Cancelling {len(self.client_tasks)} active client tasks.")
             for task in list(self.client_tasks):
                 task.cancel()
             await asyncio.gather(*self.client_tasks, return_exceptions=True)
+
+        if self.server:
+            try:
+                await self.server.wait_closed()
+            except Exception:
+                pass
         self.logger.info("Shutdown complete.")
 
     async def run(self):
