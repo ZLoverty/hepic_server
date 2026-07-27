@@ -143,16 +143,35 @@ class RS485Sensor(SensorBase):
 
 
 class RotaryEncoderSensor(SensorBase):
+    """The encoder itself has no zero/tare capability (it's a plain GPIO step
+    counter), so zeroing here means the same thing it used to mean client-side:
+    remember the current reading as an offset and subtract it going forward.
+    The difference is this offset now lives once on the server instead of once
+    per connected client, so every client sees the same zeroed value."""
+
     def __init__(self, gateway: "BaseGateway", params: dict[str, Any]):
         self.gateway = gateway
         self.ppr = params["pulses_per_revolution"]
         self.diameter = params["diameter_mm"]
+        self.offset = 0.0
+        self.logger = logging.getLogger(__name__)
+
+    def _steps_to_mm(self, steps: float) -> float:
+        return math.pi * self.diameter * float(steps) / self.ppr
 
     async def get_value(self) -> float | None:
         steps = await self.gateway.exchange(payload=None)
         if steps is None:
             return None
-        return math.pi * self.diameter * float(steps) / self.ppr
+        return self._steps_to_mm(steps) - self.offset
+
+    async def zero(self) -> bool:
+        steps = await self.gateway.exchange(payload=None)
+        if steps is None:
+            self.logger.warning("No reading available from rotary encoder; cannot zero.")
+            return False
+        self.offset = self._steps_to_mm(steps)
+        return True
 
 
 def build_gateways(config: dict[str, Any]) -> dict[str, "BaseGateway"]:
