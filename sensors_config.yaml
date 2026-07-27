@@ -50,3 +50,5 @@ sensors:
       count: 2
       dev_id: 2
       decimal_places: 3
+      zero_address: 2   # 对应变送器文档中的寄存器 40003（40001 基址 -> 0-based address = 40003-40001）
+      zero_value: 1

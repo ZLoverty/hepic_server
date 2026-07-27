@@ -32,6 +32,7 @@ class PiServer:
         self.sensor_config_data = self._load_sensor_config_data()
 
         self.sensor_name_by_id = self._load_sensor_name_map()
+        self.sensor_id_by_name = {name: sensor_id for sensor_id, name in self.sensor_name_by_id.items()}
 
         if self.test_mode:
             self.test_sensor_ids = self._load_test_sensor_ids()
@@ -190,6 +191,56 @@ class PiServer:
         action = str(parsed.get("action", "")).lower()
         return message_type in {"get_sensor_config", "request_sensor_config"} or action == "get_sensor_config"
 
+    def _parse_zero_request(self, raw_message: str) -> str | None:
+        message = raw_message.strip()
+        if not message:
+            return None
+        try:
+            parsed = json.loads(message)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        message_type = str(parsed.get("message_type", "")).lower()
+        action = str(parsed.get("action", "")).lower()
+        if message_type != "zero" and action != "zero":
+            return None
+        sensor_name = parsed.get("sensor")
+        return str(sensor_name) if sensor_name else None
+
+    def _zeroable_sensor_names(self) -> list[str]:
+        names = []
+        for item in self.sensor_config_data.get("sensors", []):
+            if isinstance(item, dict) and item.get("zeroable") and item.get("name"):
+                names.append(str(item["name"]))
+        return names
+
+    async def _zero_sensor_by_name(self, sensor_name: str) -> bool:
+        sensor_id = self.sensor_id_by_name.get(sensor_name)
+        if sensor_id is None:
+            self.logger.warning(f"Zero request for unknown sensor: {sensor_name!r}")
+            return False
+        sensor = self.sensors.get(sensor_id)
+        if sensor is None:
+            self.logger.warning(f"Zero request for sensor with no active instance: {sensor_name!r}")
+            return False
+        try:
+            ok = await asyncio.wait_for(sensor.zero(), timeout=self.config.get("sensor_timeout", 1.0))
+        except Exception as e:
+            self.logger.error(f"Zero command errored for {sensor_name!r}: {e}")
+            return False
+        if not ok:
+            self.logger.warning(f"Zero command rejected/failed for {sensor_name!r}")
+        return ok
+
+    async def _handle_zero_request(self, sensor_name: str) -> dict[str, bool]:
+        targets = self._zeroable_sensor_names() if sensor_name.lower() == "all" else [sensor_name]
+        results: dict[str, bool] = {}
+        for name in targets:
+            results[name] = await self._zero_sensor_by_name(name)
+        self.logger.info(f"Zero request results: {results}")
+        return results
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer_addr = writer.get_extra_info("peername")
         self.logger.info(f"Accepting connection from {peer_addr}")
@@ -254,6 +305,12 @@ class PiServer:
                     if self._is_sensor_config_request(message):
                         await send_message("sensor_config", self.sensor_config_data)
                         self.logger.info(f"Sent sensor_config to {peer_addr}")
+                        continue
+
+                    zero_target = self._parse_zero_request(message)
+                    if zero_target is not None:
+                        results = await self._handle_zero_request(zero_target)
+                        await send_message("zero_result", {"results": results})
             except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
                 self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise

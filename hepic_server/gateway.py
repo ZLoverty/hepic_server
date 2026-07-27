@@ -21,6 +21,10 @@ class TCPGateway(BaseGateway):
         self.timeout = timeout
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
+        # The polling loop (get_value) and on-demand calls (zero) both hit this
+        # half-duplex request/response socket; without a lock, a zero command sent
+        # mid-poll can read back the poll's response (or vice versa).
+        self._lock = asyncio.Lock()
 
     def _close(self) -> None:
         if self.writer:
@@ -41,20 +45,21 @@ class TCPGateway(BaseGateway):
             return False
 
     async def exchange(self, command: bytes | str) -> bytes | None:
-        if not await self._ensure_connected():
-            return None
-        try:
-            if isinstance(command, bytes):
-                payload = command
-            else:
-                payload = command.encode("ascii")
-            self.writer.write(payload)
-            await self.writer.drain()
-            return await asyncio.wait_for(self.reader.read(1024), timeout=self.timeout)
-        except Exception as e:
-            logger.error(f"TCP communication error: {e}")
-            self._close()
-            return None
+        async with self._lock:
+            if not await self._ensure_connected():
+                return None
+            try:
+                if isinstance(command, bytes):
+                    payload = command
+                else:
+                    payload = command.encode("ascii")
+                self.writer.write(payload)
+                await self.writer.drain()
+                return await asyncio.wait_for(self.reader.read(1024), timeout=self.timeout)
+            except Exception as e:
+                logger.error(f"TCP communication error: {e}")
+                self._close()
+                return None
 
 
 class ModbusGateway(BaseGateway):

@@ -18,6 +18,12 @@ class SensorBase(ABC):
     async def get_value(self) -> float | None:
         raise NotImplementedError
 
+    async def zero(self) -> bool:
+        """Trigger a hardware-level zero/tare on the instrument itself. Sensors that
+        don't support an instrument-level zero return False; callers should treat
+        that as "not supported" rather than a transient failure."""
+        return False
+
 
 class MettlerSensor(SensorBase):
     def __init__(self, gateway: "BaseGateway", params: dict[str, Any]):
@@ -27,8 +33,26 @@ class MettlerSensor(SensorBase):
             self.command = bytes.fromhex(str(command_hex))
         else:
             self.command = b"SI\r\n"
+        zero_command_hex = params.get("zero_command_hex")
+        if zero_command_hex:
+            self.zero_command = bytes.fromhex(str(zero_command_hex))
+        else:
+            self.zero_command = b"Z\r\n"
         self.weight_position = params.get("weight_position", 2)
         self.logger = logging.getLogger(__name__)
+
+    async def zero(self) -> bool:
+        self.logger.debug(f"Sending zero command to Mettler sensor: {self.zero_command.hex()}")
+        raw_data = await self.gateway.exchange(self.zero_command)
+        if raw_data is None:
+            self.logger.warning("No response received from Mettler zero command")
+            return False
+        response_str = raw_data.decode("ascii", errors="ignore") if isinstance(raw_data, bytes) else str(raw_data)
+        self.logger.debug(f"Received response from Mettler zero: {raw_data!r}")
+        # MT-SICS "Z" reply: "Z A" = zero set, "Z I" = not executable right now,
+        # "Z L" = out of zero-setting range. Only "Z A" counts as success.
+        first_line = response_str.strip().splitlines()[0] if response_str.strip() else ""
+        return first_line.upper().startswith("Z A")
 
     async def get_value(self) -> float | None:
         self.logger.debug(f"Sending command to Mettler sensor: {self.command.hex()}")
@@ -64,7 +88,28 @@ class RS485Sensor(SensorBase):
         self.count = params["count"]
         self.dev_id = params["dev_id"]
         self.decimal_places = params.get("decimal_places", 3)
+        self.zero_address = params.get("zero_address")
+        self.zero_value = params.get("zero_value", 1)
         self.logger = logging.getLogger(__name__)
+
+    async def zero(self) -> bool:
+        if self.zero_address is None:
+            self.logger.warning("RS485 sensor has no zero_address configured; cannot zero at the instrument.")
+            return False
+
+        from pymodbus.pdu.register_message import WriteSingleRegisterRequest
+
+        request = WriteSingleRegisterRequest(
+            address=self.zero_address,
+            registers=[self.zero_value],
+            dev_id=self.dev_id,
+        )
+        try:
+            response = await self.gateway.exchange(request)
+            return response is not None
+        except Exception as e:
+            self.logger.error(f"Failed to zero RS485 sensor: {e}")
+            return False
 
     async def get_value(self) -> float | None:
         from pymodbus.pdu import ReadHoldingRegistersRequest
