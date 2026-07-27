@@ -147,6 +147,20 @@ class PiServer:
             self.sensors = {}
         finally:
             self._sensors_initialized = True
+            self._apply_zeroable_flags()
+
+    def _apply_zeroable_flags(self) -> None:
+        """Overwrite the "zeroable" field broadcast in sensor_config with the sensor
+        object's actual is_zeroable(), instead of trusting a hand-maintained YAML
+        flag that can drift from what the code really supports."""
+        for item in self.sensor_config_data.get("sensors", []):
+            if not isinstance(item, dict):
+                continue
+            if self.test_mode:
+                item["zeroable"] = True
+                continue
+            sensor = self.sensors.get(item.get("id"))
+            item["zeroable"] = bool(sensor and sensor.is_zeroable())
 
     async def _poll_reachable_sensors(self) -> dict[str, float | None]:
         if not self.sensors:
@@ -209,11 +223,11 @@ class PiServer:
         return str(sensor_name) if sensor_name else None
 
     def _zeroable_sensor_names(self) -> list[str]:
-        names = []
-        for item in self.sensor_config_data.get("sensors", []):
-            if isinstance(item, dict) and item.get("zeroable") and item.get("name"):
-                names.append(str(item["name"]))
-        return names
+        return [
+            self.sensor_name_by_id.get(sensor_id, sensor_id)
+            for sensor_id, sensor in self.sensors.items()
+            if sensor.is_zeroable()
+        ]
 
     async def _zero_sensor_by_name(self, sensor_name: str) -> bool:
         sensor_id = self.sensor_id_by_name.get(sensor_name)

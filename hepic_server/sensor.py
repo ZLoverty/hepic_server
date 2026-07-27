@@ -24,6 +24,14 @@ class SensorBase(ABC):
         that as "not supported" rather than a transient failure."""
         return False
 
+    def is_zeroable(self) -> bool:
+        """Cheap, side-effect-free capability check — unlike zero(), this never
+        talks to hardware. It's the source of truth for the "zeroable" flag
+        reported to clients, so it must reflect actual per-instance config
+        (e.g. an RS485 sensor with no zero register configured is not zeroable),
+        not just "this class knows how to zero in general"."""
+        return False
+
 
 class MettlerSensor(SensorBase):
     def __init__(self, gateway: "BaseGateway", params: dict[str, Any]):
@@ -53,6 +61,9 @@ class MettlerSensor(SensorBase):
         # "Z L" = out of zero-setting range. Only "Z A" counts as success.
         first_line = response_str.strip().splitlines()[0] if response_str.strip() else ""
         return first_line.upper().startswith("Z A")
+
+    def is_zeroable(self) -> bool:
+        return True
 
     async def get_value(self) -> float | None:
         self.logger.debug(f"Sending command to Mettler sensor: {self.command.hex()}")
@@ -110,6 +121,9 @@ class RS485Sensor(SensorBase):
         except Exception as e:
             self.logger.error(f"Failed to zero RS485 sensor: {e}")
             return False
+
+    def is_zeroable(self) -> bool:
+        return self.zero_address is not None
 
     async def get_value(self) -> float | None:
         from pymodbus.pdu import ReadHoldingRegistersRequest
@@ -171,6 +185,9 @@ class RotaryEncoderSensor(SensorBase):
             self.logger.warning("No reading available from rotary encoder; cannot zero.")
             return False
         self.offset = self._steps_to_mm(steps)
+        return True
+
+    def is_zeroable(self) -> bool:
         return True
 
 
