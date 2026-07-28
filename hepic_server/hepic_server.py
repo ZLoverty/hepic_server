@@ -27,6 +27,8 @@ class PiServer:
         self.sensors = {}
         self._sensors_initialized = False
         self.test_sensor_ids: list[str] = []
+        self.test_zero_offsets: dict[str, float] = {}
+        self.test_last_raw_value: dict[str, float] = {}
         self.sensor_name_by_id: dict[str, str] = {}
         self._is_shutting_down = False
         self.sensor_config_data = self._load_sensor_config_data()
@@ -223,6 +225,10 @@ class PiServer:
         return str(sensor_name) if sensor_name else None
 
     def _zeroable_sensor_names(self) -> list[str]:
+        if self.test_mode:
+            # No real Sensor objects exist in test mode (see _initialize_sensors),
+            # so every generated virtual sensor is treated as zeroable.
+            return [self.sensor_name_by_id.get(sensor_id, sensor_id) for sensor_id in self.test_sensor_ids]
         return [
             self.sensor_name_by_id.get(sensor_id, sensor_id)
             for sensor_id, sensor in self.sensors.items()
@@ -234,6 +240,15 @@ class PiServer:
         if sensor_id is None:
             self.logger.warning(f"Zero request for unknown sensor: {sensor_name!r}")
             return False
+        if self.test_mode:
+            if sensor_id not in self.test_sensor_ids:
+                self.logger.warning(f"Zero request for sensor not active in test mode: {sensor_name!r}")
+                return False
+            # Same idea as RotaryEncoderSensor.zero(): remember the last generated
+            # raw reading as an offset and subtract it from future virtual readings.
+            self.test_zero_offsets[sensor_id] = self.test_last_raw_value.get(sensor_id, 2.0)
+            self.logger.info(f"[test_mode] Zeroed virtual sensor {sensor_name!r} (offset={self.test_zero_offsets[sensor_id]:.4f})")
+            return True
         sensor = self.sensors.get(sensor_id)
         if sensor is None:
             self.logger.warning(f"Zero request for sensor with no active instance: {sensor_name!r}")
@@ -287,10 +302,12 @@ class PiServer:
             try:
                 while True:
                     if self.test_mode:
-                        message = {
-                            self.sensor_name_by_id.get(sensor_id, sensor_id): 2 + random.uniform(-0.2, 0.2)
-                            for sensor_id in self.test_sensor_ids
-                        }
+                        message = {}
+                        for sensor_id in self.test_sensor_ids:
+                            raw_value = 2 + random.uniform(-0.2, 0.2)
+                            self.test_last_raw_value[sensor_id] = raw_value
+                            sensor_name = self.sensor_name_by_id.get(sensor_id, sensor_id)
+                            message[sensor_name] = raw_value - self.test_zero_offsets.get(sensor_id, 0.0)
                     else:
                         message = await self._poll_reachable_sensors()
 
