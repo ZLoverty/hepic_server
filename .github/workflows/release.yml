@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # hepic_server/__init__.py's __version__ is the single source of truth
+      # (see pyproject.toml's [tool.setuptools.dynamic]). Fail fast if
+      # someone tags a release without bumping it.
+      - name: Verify version matches tag
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          version="${tag#v}"
+          pkg_version=$(python3 -c "from hepic_server import __version__; print(__version__)")
+          if [ "$version" != "$pkg_version" ]; then
+            echo "::error::Tag $tag (version $version) does not match hepic_server.__version__ ($pkg_version)"
+            exit 1
+          fi
+          echo "Version check OK: $version"
+
+      - name: Extract release notes
+        id: notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+
+          tag = os.environ["TAG"]
+          version = tag.lstrip("v")
+          major, minor, _ = version.split(".", 2)
+          note_file = f"release_notes/v{major}.{minor}.x"
+
+          if os.path.exists(note_file):
+              content = open(note_file, encoding="utf-8").read()
+              pattern = rf"(?s)## v{re.escape(version)}\s*\n(.*?)(?=\n## v|\Z)"
+              match = re.search(pattern, content)
+              notes = match.group(1).strip() if match else f"_No release notes found for v{version}._"
+          else:
+              notes = f"_No release notes file found ({note_file})._"
+
+          print("notes<<NOTES_EOF")
+          print(notes)
+          print("NOTES_EOF")
+          PY
+
+      # Plain git archive of the tagged tree (no .git, no venv/, no __pycache__
+      # since those are gitignored) -- this is what devices can fetch instead
+      # of `git clone` when GitHub isn't reachable (see the COS mirror below).
+      - name: Package source artifact
+        id: package_src
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          src_asset="hepic-server-src-${tag}.tar.gz"
+          git archive --format=tar.gz --prefix="hepic-server-${tag}/" -o "$src_asset" HEAD
+          echo "src_asset=$src_asset" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        id: checksums
+        run: |
+          sums="SHA256SUMS.txt"
+          sha256sum "${{ steps.package_src.outputs.src_asset }}" > "$sums"
+          echo "sums=$sums" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "hepic_server ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## hepic_server ${{ steps.tag.outputs.tag }}
+
+            ### What's New
+            ${{ steps.notes.outputs.notes }}
+          files: |
+            ${{ steps.package_src.outputs.src_asset }}
+            ${{ steps.checksums.outputs.sums }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+
+      # Mirrors the release artifacts to Tencent COS so devices behind the
+      # Great Firewall don't have to reach GitHub at all. Requires repo
+      # secrets COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET / COS_REGION,
+      # and a bucket with public-read (or a CDN domain in front of it).
+      - name: Install coscmd
+        run: pip install coscmd
+
+      - name: Configure coscmd
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ vars.COS_BUCKET }}
+          COS_REGION: ${{ vars.COS_REGION }}
+        run: coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" -b "$COS_BUCKET" -r "$COS_REGION"
+
+      - name: Upload release artifacts to COS
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          prefix="hepic-server/releases/$tag"
+          coscmd upload "${{ steps.package_src.outputs.src_asset }}" "$prefix/${{ steps.package_src.outputs.src_asset }}"
+          coscmd upload "${{ steps.checksums.outputs.sums }}" "$prefix/${{ steps.checksums.outputs.sums }}"
+
+      # Only stable tags (no "-" suffix, same rule as the prerelease flag
+      # above) move the "latest" pointer, and only after the archive is
+      # confirmed on COS -- devices resolve "latest" by reading this pointer
+      # rather than us duplicating the archive under a "latest/" prefix.
+      - name: Update latest.json pointer on COS
+        if: ${{ !contains(steps.tag.outputs.tag, '-') }}
+        run: |
+          echo "{\"tag\": \"${{ steps.tag.outputs.tag }}\"}" > latest.json
+          coscmd upload latest.json hepic-server/latest.json

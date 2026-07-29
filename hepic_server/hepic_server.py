@@ -27,11 +27,14 @@ class PiServer:
         self.sensors = {}
         self._sensors_initialized = False
         self.test_sensor_ids: list[str] = []
+        self.test_zero_offsets: dict[str, float] = {}
+        self.test_last_raw_value: dict[str, float] = {}
         self.sensor_name_by_id: dict[str, str] = {}
         self._is_shutting_down = False
         self.sensor_config_data = self._load_sensor_config_data()
 
         self.sensor_name_by_id = self._load_sensor_name_map()
+        self.sensor_id_by_name = {name: sensor_id for sensor_id, name in self.sensor_name_by_id.items()}
 
         if self.test_mode:
             self.test_sensor_ids = self._load_test_sensor_ids()
@@ -146,6 +149,20 @@ class PiServer:
             self.sensors = {}
         finally:
             self._sensors_initialized = True
+            self._apply_zeroable_flags()
+
+    def _apply_zeroable_flags(self) -> None:
+        """Overwrite the "zeroable" field broadcast in sensor_config with the sensor
+        object's actual is_zeroable(), instead of trusting a hand-maintained YAML
+        flag that can drift from what the code really supports."""
+        for item in self.sensor_config_data.get("sensors", []):
+            if not isinstance(item, dict):
+                continue
+            if self.test_mode:
+                item["zeroable"] = True
+                continue
+            sensor = self.sensors.get(item.get("id"))
+            item["zeroable"] = bool(sensor and sensor.is_zeroable())
 
     async def _poll_reachable_sensors(self) -> dict[str, float | None]:
         if not self.sensors:
@@ -190,6 +207,69 @@ class PiServer:
         action = str(parsed.get("action", "")).lower()
         return message_type in {"get_sensor_config", "request_sensor_config"} or action == "get_sensor_config"
 
+    def _parse_zero_request(self, raw_message: str) -> str | None:
+        message = raw_message.strip()
+        if not message:
+            return None
+        try:
+            parsed = json.loads(message)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        message_type = str(parsed.get("message_type", "")).lower()
+        action = str(parsed.get("action", "")).lower()
+        if message_type != "zero" and action != "zero":
+            return None
+        sensor_name = parsed.get("sensor")
+        return str(sensor_name) if sensor_name else None
+
+    def _zeroable_sensor_names(self) -> list[str]:
+        if self.test_mode:
+            # No real Sensor objects exist in test mode (see _initialize_sensors),
+            # so every generated virtual sensor is treated as zeroable.
+            return [self.sensor_name_by_id.get(sensor_id, sensor_id) for sensor_id in self.test_sensor_ids]
+        return [
+            self.sensor_name_by_id.get(sensor_id, sensor_id)
+            for sensor_id, sensor in self.sensors.items()
+            if sensor.is_zeroable()
+        ]
+
+    async def _zero_sensor_by_name(self, sensor_name: str) -> bool:
+        sensor_id = self.sensor_id_by_name.get(sensor_name)
+        if sensor_id is None:
+            self.logger.warning(f"Zero request for unknown sensor: {sensor_name!r}")
+            return False
+        if self.test_mode:
+            if sensor_id not in self.test_sensor_ids:
+                self.logger.warning(f"Zero request for sensor not active in test mode: {sensor_name!r}")
+                return False
+            # Same idea as RotaryEncoderSensor.zero(): remember the last generated
+            # raw reading as an offset and subtract it from future virtual readings.
+            self.test_zero_offsets[sensor_id] = self.test_last_raw_value.get(sensor_id, 2.0)
+            self.logger.info(f"[test_mode] Zeroed virtual sensor {sensor_name!r} (offset={self.test_zero_offsets[sensor_id]:.4f})")
+            return True
+        sensor = self.sensors.get(sensor_id)
+        if sensor is None:
+            self.logger.warning(f"Zero request for sensor with no active instance: {sensor_name!r}")
+            return False
+        try:
+            ok = await asyncio.wait_for(sensor.zero(), timeout=self.config.get("sensor_timeout", 1.0))
+        except Exception as e:
+            self.logger.error(f"Zero command errored for {sensor_name!r}: {e}")
+            return False
+        if not ok:
+            self.logger.warning(f"Zero command rejected/failed for {sensor_name!r}")
+        return ok
+
+    async def _handle_zero_request(self, sensor_name: str) -> dict[str, bool]:
+        targets = self._zeroable_sensor_names() if sensor_name.lower() == "all" else [sensor_name]
+        results: dict[str, bool] = {}
+        for name in targets:
+            results[name] = await self._zero_sensor_by_name(name)
+        self.logger.info(f"Zero request results: {results}")
+        return results
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer_addr = writer.get_extra_info("peername")
         self.logger.info(f"Accepting connection from {peer_addr}")
@@ -222,10 +302,12 @@ class PiServer:
             try:
                 while True:
                     if self.test_mode:
-                        message = {
-                            self.sensor_name_by_id.get(sensor_id, sensor_id): 2 + random.uniform(-0.2, 0.2)
-                            for sensor_id in self.test_sensor_ids
-                        }
+                        message = {}
+                        for sensor_id in self.test_sensor_ids:
+                            raw_value = 2 + random.uniform(-0.2, 0.2)
+                            self.test_last_raw_value[sensor_id] = raw_value
+                            sensor_name = self.sensor_name_by_id.get(sensor_id, sensor_id)
+                            message[sensor_name] = raw_value - self.test_zero_offsets.get(sensor_id, 0.0)
                     else:
                         message = await self._poll_reachable_sensors()
 
@@ -254,6 +336,12 @@ class PiServer:
                     if self._is_sensor_config_request(message):
                         await send_message("sensor_config", self.sensor_config_data)
                         self.logger.info(f"Sent sensor_config to {peer_addr}")
+                        continue
+
+                    zero_target = self._parse_zero_request(message)
+                    if zero_target is not None:
+                        results = await self._handle_zero_request(zero_target)
+                        await send_message("zero_result", {"results": results})
             except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as e:
                 self.logger.warning(f"Client {peer_addr} disconnected: {e}")
                 raise
