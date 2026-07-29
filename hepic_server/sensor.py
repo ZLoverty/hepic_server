@@ -99,7 +99,7 @@ class RS485Sensor(SensorBase):
         self.count = params["count"]
         self.dev_id = params["dev_id"]
         self.decimal_places = params.get("decimal_places", 3)
-        self.zero_address = params.get("zero_address")
+        self.zero_address = params.get("zero_address", 2)
         self.zero_value = params.get("zero_value", 1)
         self.logger = logging.getLogger(__name__)
 
