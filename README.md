@@ -32,11 +32,15 @@ The script will:
 3. install and start the `hepic_server` systemd service (via
    `scripts/install_service.sh`), running in place out of the repo checkout
 
-The config file, `config.json` in the repo root, contains the PIN numbers of
-the rotary encoder and the IP address of the load cell host, along with
-`sensors_config.yaml` for sensor definitions. If these differ from the
-defaults, edit them before (or after) running `install.sh`, then restart the
-service:
+The live config lives in `/etc/hepic_server/` (`config.json` and
+`sensors_config.yaml`), not in the repo checkout. `config.json` contains the
+PIN numbers of the rotary encoder and the IP address of the load cell host;
+`sensors_config.yaml` has the sensor definitions. On first install, these are
+seeded from the copies in the repo root; if they already exist in
+`/etc/hepic_server/`, `install.sh` leaves them untouched, so a later `git
+pull` + `./install.sh` never clobbers a device's live config. Edit the
+`/etc/hepic_server/` copies directly (before or after running `install.sh`),
+then restart the service:
 
 ```
 $ sudo systemctl restart hepic_server

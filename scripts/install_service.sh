@@ -15,12 +15,25 @@ SERVICE_NAME="hepic_server"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUN_USER="$(whoami)"
 RUN_GROUP="$(id -gn "${RUN_USER}")"
-CONFIG_FILE="${REPO_ROOT}/config.json"
+ETC_DIR="/etc/hepic_server"
+CONFIG_FILE="${ETC_DIR}/config.json"
 
-if [ ! -f "${CONFIG_FILE}" ]; then
-  echo "Config file not found: ${CONFIG_FILE}. Create it before installing the service." >&2
-  exit 1
-fi
+# Live config lives in /etc/hepic_server so it survives `git pull` / reinstall.
+# Keep it if it already exists; otherwise seed it from the repo's defaults.
+echo "==> Ensuring config exists at ${ETC_DIR}"
+sudo mkdir -p "${ETC_DIR}"
+for name in config.json sensors_config.yaml; do
+  if [ -f "${ETC_DIR}/${name}" ]; then
+    echo "  ${ETC_DIR}/${name} already exists -- keeping it."
+  elif [ -f "${REPO_ROOT}/${name}" ]; then
+    echo "  ${ETC_DIR}/${name} not found -- initializing from ${REPO_ROOT}/${name}."
+    sudo cp "${REPO_ROOT}/${name}" "${ETC_DIR}/${name}"
+  else
+    echo "Neither ${ETC_DIR}/${name} nor ${REPO_ROOT}/${name} exist -- create one before continuing." >&2
+    exit 1
+  fi
+done
+sudo chown -R "${RUN_USER}:${RUN_GROUP}" "${ETC_DIR}"
 
 echo "==> Writing systemd unit file ${SERVICE_FILE}"
 sudo tee "${SERVICE_FILE}" > /dev/null <<EOF

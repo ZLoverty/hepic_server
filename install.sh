@@ -32,11 +32,6 @@ fi
 "${REPO_ROOT}/.venv/bin/pip" install --index-url "${PIP_INDEX_URL}" --upgrade pip
 "${REPO_ROOT}/.venv/bin/pip" install --index-url "${PIP_INDEX_URL}" -e "${REPO_ROOT}"
 
-if [ ! -f "${REPO_ROOT}/config.json" ]; then
-  echo "config.json not found in ${REPO_ROOT} -- create it before continuing." >&2
-  exit 1
-fi
-
 echo "==> [3/3] Installing and starting the systemd service"
 "${REPO_ROOT}/scripts/install_service.sh"
 
