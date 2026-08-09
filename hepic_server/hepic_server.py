@@ -137,7 +137,12 @@ class PiServer:
             return {}
 
     def _initialize_sensors(self):
-        if self.test_mode or self._sensors_initialized:
+        if self.test_mode:
+            if not self._sensors_initialized:
+                self._sensors_initialized = True
+                self._apply_zeroable_flags()
+            return
+        if self._sensors_initialized:
             return
         try:
             self.sensors = self._load_sensors()
